@@ -1,0 +1,144 @@
+#!/bin/bash
+
+# Confirmation dialog before any cleanup runs
+CONFIRM=$(osascript -e 'button returned of (display dialog "🧹 CompresoClean v1.1\n\nReady to clean your Mac?\n\nCompresoClean v1.1 will scan your Mac for installed creative apps automatically — no matter where they are installed." buttons {"Cancel", "Clean Now"} default button "Clean Now" with title "CompresoClean v1.1")')
+
+if [ "$CONFIRM" != "Clean Now" ]; then
+    exit 0
+fi
+
+# Write cleanup script to a home-dir file so it survives the /tmp/* wipe
+cat > ~/.compresoclean_runner.sh << 'CLEANSCRIPT'
+#!/bin/bash
+LOGFILE=~/.compresoclean.log
+
+echo "🧹 CompresoClean v1.1 — by Viswanath"
+echo "======================================="
+echo ""
+
+# Dynamic app finder using Spotlight — works regardless of install location or year version
+find_app() {
+    mdfind "kMDItemKind == 'Application' && kMDItemDisplayName == '$1'" 2>/dev/null | head -1
+}
+
+PHOTOSHOP=$(find_app "Adobe Photoshop 2025")
+[ -z "$PHOTOSHOP" ] && PHOTOSHOP=$(find_app "Adobe Photoshop 2024")
+[ -z "$PHOTOSHOP" ] && PHOTOSHOP=$(find_app "Adobe Photoshop 2023")
+AFTEREFFECTS=$(find_app "After Effects")
+DAVINCI=$(find_app "DaVinci Resolve")
+PREMIERE=$(find_app "Adobe Premiere Pro 2025")
+[ -z "$PREMIERE" ] && PREMIERE=$(find_app "Adobe Premiere Pro 2024")
+[ -z "$PREMIERE" ] && PREMIERE=$(find_app "Adobe Premiere Pro 2023")
+FINALCUT=$(find_app "Final Cut Pro")
+
+BEFORE_AVAIL=$(df / | tail -1 | awk '{print $4}')
+
+echo "📊 BEFORE:"
+df -h /
+echo ""
+
+echo "── Standard Cleanup ──"
+echo "→ Clearing user caches..." && rm -rf ~/Library/Caches/* 2>/dev/null && echo "✓ Caches cleared"
+echo "→ Clearing logs..." && rm -rf ~/Library/Logs/* 2>/dev/null && echo "✓ Logs cleared"
+echo "→ Clearing npm cache..." && npm cache clean --force 2>/dev/null && echo "✓ npm cleared"
+echo "→ Clearing brew cache..." && brew cleanup -s 2>/dev/null && echo "✓ brew cleared"
+echo "→ Clearing Trash..." && rm -rf ~/.Trash/* 2>/dev/null && echo "✓ Trash cleared"
+echo "→ Clearing temp files..." && rm -rf /tmp/* /private/var/tmp/* 2>/dev/null && echo "✓ Temp cleared"
+echo ""
+
+echo "── Creative App Cleanup ──"
+
+# Adobe Photoshop
+if [ -n "$PHOTOSHOP" ]; then
+    echo "→ Found Photoshop at: $PHOTOSHOP"
+    echo "→ Clearing Adobe Photoshop cache..."
+    rm -rf ~/Library/Application\ Support/Adobe/Adobe\ Photoshop*/Adobe\ Photoshop*\ Settings/Temp 2>/dev/null
+    rm -rf ~/Library/Caches/com.adobe.photoshop* 2>/dev/null
+    echo "✓ Photoshop cache cleared"
+    echo "  ✓ Photoshop cache cleared" >> $LOGFILE
+else
+    echo "⊘ Photoshop not found on this Mac — skipping"
+    echo "  ⊘ Photoshop not found — skipped" >> $LOGFILE
+fi
+
+# Adobe After Effects
+if [ -n "$AFTEREFFECTS" ]; then
+    echo "→ Found After Effects at: $AFTEREFFECTS"
+    echo "→ Clearing Adobe After Effects cache..."
+    rm -rf ~/Library/Application\ Support/Adobe/After\ Effects/*/disk\ cache 2>/dev/null
+    rm -rf ~/Library/Caches/com.adobe.AfterEffects* 2>/dev/null
+    echo "✓ After Effects cache cleared"
+    echo "  ✓ After Effects cache cleared" >> $LOGFILE
+else
+    echo "⊘ After Effects not found on this Mac — skipping"
+    echo "  ⊘ After Effects not found — skipped" >> $LOGFILE
+fi
+
+# Adobe Premiere Pro
+if [ -n "$PREMIERE" ]; then
+    echo "→ Found Premiere Pro at: $PREMIERE"
+    echo "→ Clearing Adobe Premiere Pro cache..."
+    rm -rf ~/Library/Application\ Support/Adobe/Common/Media\ Cache 2>/dev/null
+    rm -rf ~/Library/Application\ Support/Adobe/Common/Media\ Cache\ Files 2>/dev/null
+    rm -rf ~/Library/Caches/com.adobe.AdobePremierePro* 2>/dev/null
+    echo "✓ Premiere Pro cache cleared"
+    echo "  ✓ Premiere Pro cache cleared" >> $LOGFILE
+else
+    echo "⊘ Premiere Pro not found on this Mac — skipping"
+    echo "  ⊘ Premiere Pro not found — skipped" >> $LOGFILE
+fi
+
+# DaVinci Resolve
+if [ -n "$DAVINCI" ]; then
+    echo "→ Found DaVinci Resolve at: $DAVINCI"
+    echo "→ Clearing DaVinci Resolve cache..."
+    rm -rf ~/Library/Application\ Support/Blackmagic\ Design/DaVinci\ Resolve/Support/CacheClip 2>/dev/null
+    rm -rf ~/Library/Caches/com.blackmagic-design.DaVinciResolve* 2>/dev/null
+    echo "✓ DaVinci Resolve cache cleared"
+    echo "  ✓ DaVinci Resolve cache cleared" >> $LOGFILE
+else
+    echo "⊘ DaVinci Resolve not found on this Mac — skipping"
+    echo "  ⊘ DaVinci Resolve not found — skipped" >> $LOGFILE
+fi
+
+# Final Cut Pro
+if [ -n "$FINALCUT" ]; then
+    echo "→ Found Final Cut Pro at: $FINALCUT"
+    echo "→ Clearing Final Cut Pro cache..."
+    rm -rf ~/Movies/Final\ Cut\ Backups 2>/dev/null
+    rm -rf ~/Library/Caches/com.apple.FinalCut* 2>/dev/null
+    echo "✓ Final Cut Pro cache cleared"
+    echo "  ✓ Final Cut Pro cache cleared" >> $LOGFILE
+else
+    echo "⊘ Final Cut Pro not found on this Mac — skipping"
+    echo "  ⊘ Final Cut Pro not found — skipped" >> $LOGFILE
+fi
+
+echo ""
+
+AFTER_AVAIL=$(df / | tail -1 | awk '{print $4}')
+MB_FREED=$(( (AFTER_AVAIL - BEFORE_AVAIL) / 2048 ))
+
+echo "📊 AFTER:"
+df -h /
+echo ""
+echo "💾 Space freed: ${MB_FREED} MB"
+echo ""
+
+LOG_DATE=$(date '+%Y-%m-%d %H:%M:%S')
+echo "[${LOG_DATE}] Cleanup complete — ${MB_FREED} MB freed" >> $LOGFILE
+echo "📝 Log saved to ~/.compresoclean.log"
+echo ""
+echo "✅ Cleanup complete!"
+
+osascript -e "display notification \"Freed ${MB_FREED} MB of disk space.\" with title \"CompresoClean v1.1\" subtitle \"Cleanup complete!\""
+
+rm -f ~/.compresoclean_runner.sh
+CLEANSCRIPT
+
+chmod +x ~/.compresoclean_runner.sh
+
+osascript -e 'tell application "Terminal"
+    activate
+    do script "~/.compresoclean_runner.sh"
+end tell'

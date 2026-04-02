@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CompresoClean .gitignore
+# ─────────────────────────────────────────────────────────────────────────────
+
+# macOS system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# DMG files — distribute via GitHub Releases, not the repo
+*.dmg
+*.pkg
+*.iso
+
+# Build artifacts
+*_DMG/
+build/
+dist/
+
+# Logs
+*.log
+~/.compresoclean.log
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
