@@ -1,7 +1,7 @@
 # 🧹 CompresoClean
 
 **A free, no-subscription macOS cleaner for professionals.**  
-Built by [Viswanath Bodasakurthi](https://viswabnath.github.io/portfolio/) · [OneMark Agency](https://onemark.digi)
+Built by [Viswanath Bodasakurthi](https://viswabnath.github.io/portfolio/) · [OneMark Agency](https://onemark.co.in)
 
 > Replaces CleanMyMac — no paywalls, no accounts, no bloat.
 
