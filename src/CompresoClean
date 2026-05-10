@@ -1,138 +1,305 @@
 #!/bin/bash
 
-# Confirmation dialog before any cleanup runs
-CONFIRM=$(osascript -e 'button returned of (display dialog "🧹 CompresoClean v1.1\n\nReady to clean your Mac?\n\nCompresoClean v1.1 will scan your Mac for installed creative apps automatically — no matter where they are installed." buttons {"Cancel", "Clean Now"} default button "Clean Now" with title "CompresoClean v1.1")')
+VERSION="1.2"
 
-if [ "$CONFIRM" != "Clean Now" ]; then
-    exit 0
-fi
+CONFIRM=$(osascript -e "button returned of (display dialog \"CompresoClean v${VERSION}\n\nReady to clean your Mac?\n\nDetects all installed creative apps automatically.\" buttons {\"Cancel\", \"Clean Now\"} default button \"Clean Now\" with title \"CompresoClean v${VERSION}\")")
 
-# Write cleanup script to a home-dir file so it survives the /tmp/* wipe
+[ "$CONFIRM" != "Clean Now" ] && exit 0
+
+# Write runner to home dir — /tmp gets wiped during cleanup
 cat > ~/.compresoclean_runner.sh << 'CLEANSCRIPT'
 #!/bin/bash
-LOGFILE=~/.compresoclean.log
 
-echo "🧹 CompresoClean v1.1 — by Viswanath"
+# Unmatched globs expand to nothing instead of erroring
+shopt -s nullglob
+
+LOGFILE="$HOME/.compresoclean.log"
+
+echo "CompresoClean v1.2 -- by Viswanath"
 echo "======================================="
 echo ""
 
-# Dynamic app finder using Spotlight — works regardless of install location or year version
-find_app() {
-    mdfind "kMDItemKind == 'Application' && kMDItemDisplayName == '$1'" 2>/dev/null | head -1
+# ── Detection helpers ─────────────────────────────────────────────────────────
+
+# Finds app by display name, trying year suffixes (2026 -> 2022) then bare name
+detect_by_name() {
+    local name="$1"
+    local result
+    for suffix in " 2026" " 2025" " 2024" " 2023" " 2022" ""; do
+        result=$(mdfind "kMDItemKind == 'Application' && kMDItemDisplayName == '${name}${suffix}'" 2>/dev/null | head -1)
+        [ -n "$result" ] && echo "$result" && return 0
+    done
+    return 1
 }
 
-PHOTOSHOP=$(find_app "Adobe Photoshop 2025")
-[ -z "$PHOTOSHOP" ] && PHOTOSHOP=$(find_app "Adobe Photoshop 2024")
-[ -z "$PHOTOSHOP" ] && PHOTOSHOP=$(find_app "Adobe Photoshop 2023")
-AFTEREFFECTS=$(find_app "After Effects")
-DAVINCI=$(find_app "DaVinci Resolve")
-PREMIERE=$(find_app "Adobe Premiere Pro 2025")
-[ -z "$PREMIERE" ] && PREMIERE=$(find_app "Adobe Premiere Pro 2024")
-[ -z "$PREMIERE" ] && PREMIERE=$(find_app "Adobe Premiere Pro 2023")
-FINALCUT=$(find_app "Final Cut Pro")
+# Finds app by bundle identifier (more reliable than display name)
+detect_by_bundle() {
+    mdfind "kMDItemCFBundleIdentifier == '$1'" 2>/dev/null | head -1
+}
 
+_APP_NAME=""
+_APP_FOUND=""
+begin_app() {
+    _APP_NAME="$1"
+    _APP_FOUND="$2"
+    if [ -n "$_APP_FOUND" ]; then
+        echo "  found: $_APP_NAME"
+        return 0
+    else
+        echo "  skip:  $_APP_NAME (not installed)"
+        return 1
+    fi
+}
+
+log_done() {
+    echo "  done:  $_APP_NAME"
+    echo "  [ok] $_APP_NAME" >> "$LOGFILE"
+}
+
+# ── Disk baseline ─────────────────────────────────────────────────────────────
 BEFORE_AVAIL=$(df / | tail -1 | awk '{print $4}')
+echo "BEFORE:"; df -h /; echo ""
 
-echo "📊 BEFORE:"
-df -h /
+# ── Standard cleanup ──────────────────────────────────────────────────────────
+echo "-- Standard Cleanup --"
+echo "  user caches..."  && rm -rf "$HOME"/Library/Caches/*        2>/dev/null && echo "  done"
+echo "  user logs..."    && rm -rf "$HOME"/Library/Logs/*          2>/dev/null && echo "  done"
+echo "  npm cache..."    && npm cache clean --force                2>/dev/null && echo "  done"
+echo "  homebrew..."     && brew cleanup -s                        2>/dev/null && echo "  done"
+echo "  trash..."        && rm -rf "$HOME"/.Trash/*                2>/dev/null && echo "  done"
+echo "  temp files..."   && rm -rf /tmp/* /private/var/tmp/*       2>/dev/null && echo "  done"
 echo ""
 
-echo "── Standard Cleanup ──"
-echo "→ Clearing user caches..." && rm -rf ~/Library/Caches/* 2>/dev/null && echo "✓ Caches cleared"
-echo "→ Clearing logs..." && rm -rf ~/Library/Logs/* 2>/dev/null && echo "✓ Logs cleared"
-echo "→ Clearing npm cache..." && npm cache clean --force 2>/dev/null && echo "✓ npm cleared"
-echo "→ Clearing brew cache..." && brew cleanup -s 2>/dev/null && echo "✓ brew cleared"
-echo "→ Clearing Trash..." && rm -rf ~/.Trash/* 2>/dev/null && echo "✓ Trash cleared"
-echo "→ Clearing temp files..." && rm -rf /tmp/* /private/var/tmp/* 2>/dev/null && echo "✓ Temp cleared"
+# ── Creative app cleanup ──────────────────────────────────────────────────────
+echo "-- Creative App Cleanup --"
+
+# ── Adobe ─────────────────────────────────────────────────────────────────────
+
+if begin_app "Adobe Photoshop" "$(detect_by_name "Adobe Photoshop")"; then
+    rm -rf "$HOME"/Library/Application\ Support/Adobe/Adobe\ Photoshop*/Adobe\ Photoshop*\ Settings/Temp
+    rm -rf "$HOME"/Library/Caches/com.adobe.photoshop*
+    log_done
+fi
+
+if begin_app "Adobe Illustrator" "$(detect_by_name "Adobe Illustrator")"; then
+    rm -rf "$HOME"/Library/Application\ Support/Adobe/Adobe\ Illustrator*/x64/temp
+    rm -rf "$HOME"/Library/Caches/com.adobe.illustrator*
+    log_done
+fi
+
+if begin_app "Adobe InDesign" "$(detect_by_name "Adobe InDesign")"; then
+    rm -rf "$HOME"/Library/Caches/com.adobe.InDesign*
+    log_done
+fi
+
+if begin_app "Adobe After Effects" "$(detect_by_name "After Effects")"; then
+    rm -rf "$HOME"/Library/Application\ Support/Adobe/After\ Effects/*/disk\ cache
+    rm -rf "$HOME"/Library/Application\ Support/Adobe/After\ Effects/*/Cache\ Files
+    rm -rf "$HOME"/Library/Caches/com.adobe.AfterEffects*
+    log_done
+fi
+
+if begin_app "Adobe Premiere Pro" "$(detect_by_name "Adobe Premiere Pro")"; then
+    rm -rf "$HOME"/Library/Application\ Support/Adobe/Common/Media\ Cache
+    rm -rf "$HOME"/Library/Application\ Support/Adobe/Common/Media\ Cache\ Files
+    rm -rf "$HOME"/Library/Caches/com.adobe.AdobePremierePro*
+    log_done
+fi
+
+if begin_app "Adobe Media Encoder" "$(detect_by_name "Adobe Media Encoder")"; then
+    rm -rf "$HOME"/Library/Caches/com.adobe.AdobeMediaEncoder*
+    log_done
+fi
+
+if begin_app "Adobe Lightroom Classic" "$(detect_by_bundle "com.adobe.LightroomClassicCC7")"; then
+    rm -rf "$HOME"/Library/Caches/com.adobe.LightroomClassicCC7*
+    rm -rf "$HOME"/Library/Application\ Support/Adobe/Lightroom/Cache
+    log_done
+fi
+
+if begin_app "Adobe Lightroom" "$(detect_by_bundle "com.adobe.lightroomCC")"; then
+    rm -rf "$HOME"/Library/Caches/com.adobe.lightroomCC*
+    log_done
+fi
+
+if begin_app "Adobe Audition" "$(detect_by_name "Adobe Audition")"; then
+    rm -rf "$HOME"/Library/Application\ Support/Adobe/Audition/*/Scratch\ Disks
+    rm -rf "$HOME"/Library/Caches/com.adobe.Audition*
+    log_done
+fi
+
+if begin_app "Adobe Bridge" "$(detect_by_name "Adobe Bridge")"; then
+    rm -rf "$HOME"/Library/Caches/com.adobe.Bridge*
+    log_done
+fi
+
+if begin_app "Adobe Character Animator" "$(detect_by_name "Adobe Character Animator")"; then
+    rm -rf "$HOME"/Library/Caches/com.adobe.character-animator*
+    log_done
+fi
+
+if begin_app "Adobe Animate" "$(detect_by_name "Adobe Animate")"; then
+    rm -rf "$HOME"/Library/Caches/com.adobe.Animate*
+    log_done
+fi
+
+if begin_app "Adobe Acrobat" "$(detect_by_bundle "com.adobe.Acrobat.Pro")"; then
+    rm -rf "$HOME"/Library/Caches/com.adobe.Acrobat*
+    log_done
+fi
+
+if begin_app "Adobe XD / Express" "$(detect_by_bundle "com.adobe.adobexd" 2>/dev/null || detect_by_name "Adobe Express")"; then
+    rm -rf "$HOME"/Library/Caches/com.adobe.adobexd*
+    rm -rf "$HOME"/Library/Caches/com.adobe.Adobe-Express*
+    log_done
+fi
+
+# ── Apple Pro Apps ────────────────────────────────────────────────────────────
+
+if begin_app "Final Cut Pro" "$(detect_by_bundle "com.apple.FinalCut")"; then
+    rm -rf "$HOME"/Movies/Final\ Cut\ Backups
+    rm -rf "$HOME"/Library/Caches/com.apple.FinalCut*
+    log_done
+fi
+
+if begin_app "Logic Pro" "$(detect_by_bundle "com.apple.logic10")"; then
+    rm -rf "$HOME"/Library/Caches/com.apple.logic10*
+    rm -rf "$HOME"/Library/Application\ Support/Logic/Cache
+    log_done
+fi
+
+if begin_app "GarageBand" "$(detect_by_bundle "com.apple.GarageBand")"; then
+    rm -rf "$HOME"/Library/Caches/com.apple.GarageBand*
+    log_done
+fi
+
+if begin_app "Motion" "$(detect_by_bundle "com.apple.motionapp")"; then
+    rm -rf "$HOME"/Library/Caches/com.apple.motionapp*
+    log_done
+fi
+
+if begin_app "Compressor" "$(detect_by_bundle "com.apple.compressor")"; then
+    rm -rf "$HOME"/Library/Caches/com.apple.Compressor*
+    log_done
+fi
+
+# ── Video / NLE ───────────────────────────────────────────────────────────────
+
+if begin_app "DaVinci Resolve" "$(detect_by_name "DaVinci Resolve")"; then
+    rm -rf "$HOME"/Library/Application\ Support/Blackmagic\ Design/DaVinci\ Resolve/Support/CacheClip
+    rm -rf "$HOME"/Library/Caches/com.blackmagic-design.DaVinciResolve*
+    log_done
+fi
+
+if begin_app "ScreenFlow" "$(detect_by_bundle "com.telestream.mac.ScreenFlow9" 2>/dev/null || detect_by_name "ScreenFlow")"; then
+    rm -rf "$HOME"/Library/Caches/com.telestream.mac.ScreenFlow*
+    log_done
+fi
+
+if begin_app "Camtasia" "$(detect_by_bundle "com.techsmith.camtasia")"; then
+    rm -rf "$HOME"/Library/Caches/com.techsmith.camtasia*
+    log_done
+fi
+
+if begin_app "HandBrake" "$(detect_by_bundle "fr.handbrake.HandBrake")"; then
+    rm -rf "$HOME"/Library/Caches/fr.handbrake.HandBrake*
+    log_done
+fi
+
+# ── 3D / VFX ─────────────────────────────────────────────────────────────────
+
+# Blender: cache dirs are version-numbered (e.g. 5.0/cache/) -- scan dynamically
+if begin_app "Blender" "$(detect_by_bundle "org.blenderfoundation.blender" 2>/dev/null || detect_by_name "Blender")"; then
+    find "$HOME/Library/Application Support/Blender" -mindepth 2 -maxdepth 2 -type d -name "cache" 2>/dev/null | while read -r d; do
+        rm -rf "$d" && echo "  removed: $d"
+    done
+    rm -rf /tmp/blender_*
+    log_done
+fi
+
+if begin_app "Cinema 4D" "$(detect_by_name "Cinema 4D")"; then
+    rm -rf "$HOME"/Library/Caches/com.maxon.Cinema4D*
+    rm -rf "$HOME"/Library/Application\ Support/Maxon/Maxon\ Cinema\ 4D*/cache
+    log_done
+fi
+
+if begin_app "Autodesk Maya" "$(detect_by_bundle "com.autodesk.maya" 2>/dev/null || detect_by_name "Maya")"; then
+    rm -rf "$HOME"/Library/Caches/com.autodesk.maya*
+    log_done
+fi
+
+if begin_app "Houdini" "$(detect_by_name "Houdini" 2>/dev/null || detect_by_name "Houdini FX")"; then
+    rm -rf "$HOME"/Library/Caches/com.sidefx.*
+    rm -rf /tmp/houdini_*
+    log_done
+fi
+
+# ── Design ────────────────────────────────────────────────────────────────────
+
+if begin_app "Sketch" "$(detect_by_bundle "com.bohemiancoding.sketch3")"; then
+    rm -rf "$HOME"/Library/Caches/com.bohemiancoding.sketch3*
+    log_done
+fi
+
+if begin_app "Figma" "$(detect_by_bundle "com.figma.Desktop")"; then
+    rm -rf "$HOME"/Library/Caches/com.figma.Desktop*
+    rm -rf "$HOME"/Library/Application\ Support/Figma/Cache
+    rm -rf "$HOME"/Library/Application\ Support/Figma/Code\ Cache
+    log_done
+fi
+
+if begin_app "Affinity Photo" "$(detect_by_bundle "com.seriflabs.affinityphoto")"; then
+    rm -rf "$HOME"/Library/Caches/com.seriflabs.affinityphoto*
+    log_done
+fi
+
+if begin_app "Affinity Designer" "$(detect_by_bundle "com.seriflabs.affinitydesigner")"; then
+    rm -rf "$HOME"/Library/Caches/com.seriflabs.affinitydesigner*
+    log_done
+fi
+
+if begin_app "Affinity Publisher" "$(detect_by_bundle "com.seriflabs.affinitypublisher")"; then
+    rm -rf "$HOME"/Library/Caches/com.seriflabs.affinitypublisher*
+    log_done
+fi
+
+# ── Audio ─────────────────────────────────────────────────────────────────────
+
+if begin_app "Ableton Live" "$(detect_by_bundle "com.ableton.live" 2>/dev/null || detect_by_name "Ableton Live")"; then
+    rm -rf "$HOME"/Library/Caches/com.ableton.live*
+    log_done
+fi
+
+if begin_app "Pro Tools" "$(detect_by_bundle "com.avid.ProTools" 2>/dev/null || detect_by_name "Pro Tools")"; then
+    rm -rf "$HOME"/Library/Caches/com.avid.ProTools*
+    log_done
+fi
+
+# ── Photo editing ─────────────────────────────────────────────────────────────
+
+if begin_app "Capture One" "$(detect_by_bundle "com.phaseone.captureone" 2>/dev/null || detect_by_name "Capture One")"; then
+    rm -rf "$HOME"/Library/Caches/com.phaseone.captureone*
+    log_done
+fi
+
+if begin_app "Luminar" "$(detect_by_bundle "com.skylum.luminar" 2>/dev/null || detect_by_name "Luminar")"; then
+    rm -rf "$HOME"/Library/Caches/com.skylum.luminar*
+    log_done
+fi
+
+# ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
-
-echo "── Creative App Cleanup ──"
-
-# Adobe Photoshop
-if [ -n "$PHOTOSHOP" ]; then
-    echo "→ Found Photoshop at: $PHOTOSHOP"
-    echo "→ Clearing Adobe Photoshop cache..."
-    rm -rf ~/Library/Application\ Support/Adobe/Adobe\ Photoshop*/Adobe\ Photoshop*\ Settings/Temp 2>/dev/null
-    rm -rf ~/Library/Caches/com.adobe.photoshop* 2>/dev/null
-    echo "✓ Photoshop cache cleared"
-    echo "  ✓ Photoshop cache cleared" >> $LOGFILE
-else
-    echo "⊘ Photoshop not found on this Mac — skipping"
-    echo "  ⊘ Photoshop not found — skipped" >> $LOGFILE
-fi
-
-# Adobe After Effects
-if [ -n "$AFTEREFFECTS" ]; then
-    echo "→ Found After Effects at: $AFTEREFFECTS"
-    echo "→ Clearing Adobe After Effects cache..."
-    rm -rf ~/Library/Application\ Support/Adobe/After\ Effects/*/disk\ cache 2>/dev/null
-    rm -rf ~/Library/Caches/com.adobe.AfterEffects* 2>/dev/null
-    echo "✓ After Effects cache cleared"
-    echo "  ✓ After Effects cache cleared" >> $LOGFILE
-else
-    echo "⊘ After Effects not found on this Mac — skipping"
-    echo "  ⊘ After Effects not found — skipped" >> $LOGFILE
-fi
-
-# Adobe Premiere Pro
-if [ -n "$PREMIERE" ]; then
-    echo "→ Found Premiere Pro at: $PREMIERE"
-    echo "→ Clearing Adobe Premiere Pro cache..."
-    rm -rf ~/Library/Application\ Support/Adobe/Common/Media\ Cache 2>/dev/null
-    rm -rf ~/Library/Application\ Support/Adobe/Common/Media\ Cache\ Files 2>/dev/null
-    rm -rf ~/Library/Caches/com.adobe.AdobePremierePro* 2>/dev/null
-    echo "✓ Premiere Pro cache cleared"
-    echo "  ✓ Premiere Pro cache cleared" >> $LOGFILE
-else
-    echo "⊘ Premiere Pro not found on this Mac — skipping"
-    echo "  ⊘ Premiere Pro not found — skipped" >> $LOGFILE
-fi
-
-# DaVinci Resolve
-if [ -n "$DAVINCI" ]; then
-    echo "→ Found DaVinci Resolve at: $DAVINCI"
-    echo "→ Clearing DaVinci Resolve cache..."
-    rm -rf ~/Library/Application\ Support/Blackmagic\ Design/DaVinci\ Resolve/Support/CacheClip 2>/dev/null
-    rm -rf ~/Library/Caches/com.blackmagic-design.DaVinciResolve* 2>/dev/null
-    echo "✓ DaVinci Resolve cache cleared"
-    echo "  ✓ DaVinci Resolve cache cleared" >> $LOGFILE
-else
-    echo "⊘ DaVinci Resolve not found on this Mac — skipping"
-    echo "  ⊘ DaVinci Resolve not found — skipped" >> $LOGFILE
-fi
-
-# Final Cut Pro
-if [ -n "$FINALCUT" ]; then
-    echo "→ Found Final Cut Pro at: $FINALCUT"
-    echo "→ Clearing Final Cut Pro cache..."
-    rm -rf ~/Movies/Final\ Cut\ Backups 2>/dev/null
-    rm -rf ~/Library/Caches/com.apple.FinalCut* 2>/dev/null
-    echo "✓ Final Cut Pro cache cleared"
-    echo "  ✓ Final Cut Pro cache cleared" >> $LOGFILE
-else
-    echo "⊘ Final Cut Pro not found on this Mac — skipping"
-    echo "  ⊘ Final Cut Pro not found — skipped" >> $LOGFILE
-fi
-
-echo ""
-
 AFTER_AVAIL=$(df / | tail -1 | awk '{print $4}')
 MB_FREED=$(( (AFTER_AVAIL - BEFORE_AVAIL) / 2048 ))
 
-echo "📊 AFTER:"
-df -h /
+echo "AFTER:"; df -h /; echo ""
+echo "Space freed: ${MB_FREED} MB"
 echo ""
-echo "💾 Space freed: ${MB_FREED} MB"
-echo ""
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] CompresoClean v1.2 -- Cleanup complete. ${MB_FREED} MB freed." >> "$LOGFILE"
+echo "Log saved to ~/.compresoclean.log"
+echo "Cleanup complete."
 
-LOG_DATE=$(date '+%Y-%m-%d %H:%M:%S')
-echo "[${LOG_DATE}] Cleanup complete — ${MB_FREED} MB freed" >> $LOGFILE
-echo "📝 Log saved to ~/.compresoclean.log"
-echo ""
-echo "✅ Cleanup complete!"
-
-osascript -e "display notification \"Freed ${MB_FREED} MB of disk space.\" with title \"CompresoClean v1.1\" subtitle \"Cleanup complete!\""
-
+osascript -e "display notification \"Freed ${MB_FREED} MB of disk space.\" with title \"CompresoClean v1.2\" subtitle \"Cleanup complete\""
 rm -f ~/.compresoclean_runner.sh
 CLEANSCRIPT
 

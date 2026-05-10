@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="${1:-1.1}"
+VERSION="${1:-1.2}"
 APP_NAME="CompresoClean"
 DMG_NAME="${APP_NAME}_v${VERSION}.dmg"
 VOLUME_NAME="${APP_NAME} v${VERSION} by OneMark"
@@ -95,11 +95,11 @@ if [[ ! -f "$ICON" ]]; then
 fi
 
 # ── 5. Sync app/ bundle back to local /Applications (optional) ───────────────
-read -rp "🔄  Sync updated .app to /Applications? [y/N] " sync_choice
-if [[ "${sync_choice,,}" == "y" ]]; then
-  echo "📦  Copying to /Applications..."
+read -rp "Sync updated .app to /Applications? [y/N] " sync_choice
+if [[ "$(echo "$sync_choice" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
+  echo "Copying to /Applications..."
   cp -r "${APP_BUNDLE}" /Applications/
-  echo "✅  /Applications/${APP_NAME}.app updated"
+  echo "/Applications/${APP_NAME}.app updated"
 fi
 
 # ── 6. Package as DMG ────────────────────────────────────────────────────────
