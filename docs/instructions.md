@@ -1,6 +1,6 @@
 # CompresoClean — Build Documentation
 **Built by Viswanath Bodasakurthi | OneMark Agency**
-**Date: April 2026 | Version: 1.0**
+**Date: April 2026 (updated August 2026) | Version: 1.3**
 
 ---
 
@@ -261,3 +261,132 @@ To find the exact display name to pass to find_app(), run this in Terminal:
     mdfind "kMDItemKind == 'Application'" | xargs -I{} mdls -name kMDItemDisplayName "{}" | grep -i "appname"
 
 Or simply check the app name as it appears in Spotlight search (Cmd+Space).
+
+---
+
+## Changelog — v1.3 (August 2026)
+
+### New feature: Smart Scan
+
+Previously, cache cleanup only ran for the ~28 creative apps hardcoded into the script.
+Any other heavy app (browsers, IDEs, chat apps, etc.) was invisible to CompresoClean even
+if it was hoarding gigabytes of cache. v1.3 adds a generic scan that covers every installed
+app, on top of the existing curated cleanup (which is unchanged).
+
+### How Smart Scan works
+
+1. Finds every `.app` bundle in `/Applications` and `~/Applications`, including apps
+   nested inside a folder (e.g. `Adobe Photoshop 2025/Adobe Photoshop 2025.app`), using:
+
+       find /Applications "$HOME/Applications" \( -iname "*.app" -type d \) -prune -print
+
+   `-prune` stops `find` from descending into a matched `.app`, so helper apps bundled
+   inside `Contents/` aren't double-counted.
+
+2. For each app, reads its bundle ID directly from `Info.plist`:
+
+       bundle_id=$(defaults read "$app/Contents/Info" CFBundleIdentifier 2>/dev/null)
+
+3. Sizes up only known junk locations for that app — never the app bundle itself, and
+   never general user data:
+   - `~/Library/Caches/<bundle_id>*`
+   - `~/Library/Logs/<app_name>*`
+   - `~/Library/Saved Application State/<bundle_id>*.savedState`
+   - `~/Library/Containers/<bundle_id>/Data/Library/Caches/*` (sandboxed apps)
+   - Junk-named subfolders only (`Cache`, `Caches`, `Cache Files`, `GPUCache`,
+     `Code Cache`, `tmp`, `temp`) inside `~/Library/Application Support/<app_name>` —
+     the rest of Application Support (real settings, projects, licenses) is left alone
+
+4. Ranks the top 15 apps by total reclaimable size and prints them as a numbered list
+   in the terminal.
+
+5. Prompts for input: type comma-separated numbers (`1,3,5`), `all`, or press Enter to
+   skip. Only the apps you pick are cleaned, and each one is logged individually to
+   `~/.compresoclean.log`.
+
+### Bug fixes found while building Smart Scan
+
+- **bash 3.2 compatibility**: macOS ships bash 3.2 by default (`/bin/bash`), which does
+  not have `mapfile`/`readarray` (added in bash 4.0). The script originally used
+  `mapfile -t arr < <(cmd)`; this silently failed with `mapfile: command not found` on a
+  stock Mac. Replaced with a portable pattern:
+
+        arr=()
+        while IFS= read -r line; do arr+=("$line"); done < <(cmd)
+
+- **Empty app-name glob widening**: if an app's name were ever empty, the pattern
+  `"$HOME"/Library/Logs/"$app_name"*` would collapse to `Logs/*`, which — with
+  `nullglob` on — matches *every* file in `~/Library/Logs`, not nothing. Same issue
+  existed for the `Application Support/$app_name` directory check. Fixed by returning
+  early from the junk-path lookup whenever `app_name` is empty:
+
+        [ -z "$app_name" ] && return
+
+  In practice `app_name` always comes from `basename "$app" .app` on a real path, so
+  this was a defensive fix rather than an observed failure — but the blast radius
+  (deleting unrelated apps' logs) was high enough to guard against explicitly.
+
+### Verification
+
+Tested the scan functions in isolation against real apps on a dev Mac (not the packaged
+`.app`, just the extracted bash functions) before shipping:
+- Empty `bundle_id`/`app_name` inputs correctly produced zero candidate paths.
+- A full scan across every installed app on the machine completed in about a second and
+  surfaced sensible, real results (e.g. an 881 MB cache for one app, tens of MB for
+  several others) — confirming the ranking and glob logic behave as intended.
+
+### Follow-up: Xcode and Android Studio were invisible to Smart Scan
+
+After shipping the above, real-world testing showed Xcode and Android Studio — both
+installed and detected by `mdfind` — never appeared in the Smart Scan checklist at all.
+Cause: neither app's real cache lives under `~/Library/Caches`, `~/Library/Logs`,
+`~/Library/Saved Application State`, or `~/Library/Containers` — the only locations
+Smart Scan's generic heuristic checks. Measured on the dev Mac:
+
+    ~/Library/Developer/Xcode/DerivedData     2.7 GB
+    ~/Library/Developer/CoreSimulator         6.4 GB
+    ~/.gradle/caches                          4.6 GB
+    ~/.android/avd                             10 GB
+
+~24 GB combined, computed as 0 MB reclaimable by Smart Scan, and silently filtered out
+before ever reaching the picker.
+
+Fix: added an explicit "Developer Tools" block to the curated cleanup (same pattern as
+Blender's dynamic cache-dir handling), rather than trying to generalize the heuristic
+further:
+
+- **Xcode** — `DerivedData`, `CoreSimulator/Caches`, `xcrun simctl delete unavailable`,
+  and its own `~/Library/Caches/com.apple.dt.Xcode*`
+- **Android Studio / Gradle** — `~/Library/Caches/Google/AndroidStudio*`,
+  `~/Library/Application Support/Google/AndroidStudio*/caches`, `~/.gradle/caches`
+
+Deliberately **not** touched: Xcode Archives (`~/Library/Developer/Xcode/Archives`) and
+Android AVDs (`~/.android/avd`). Both showed up as huge in the measurements above, but
+they aren't cache — Archives are your actual App Store submission builds, and an AVD is
+a configured virtual device with its own installed apps and data. Deleting either would
+destroy real work, not reclaim junk, so they're out of scope for automatic cleanup.
+
+### Follow-up: the multi-select dialog didn't feel like it supported multiple apps
+
+Real-world testing also surfaced a usability bug in the Smart Scan picker. The AppleScript
+`choose from list ... with multiple selections allowed` dialog does technically support
+picking more than one item — but only via Cmd-click or Shift-click. A plain click on a
+second row replaces the first selection instead of adding to it, which is standard macOS
+list-box behavior but isn't discoverable, and reads as "the app won't let me select more
+than one."
+
+Fix: dropped the GUI dialog entirely in favor of a terminal numbered list, consistent with
+the rest of CompresoClean's terminal-driven UX:
+
+    heaviest apps found:
+       1) Claude -- 881 MB reclaimable (app 320 MB)
+       2) Antigravity -- 71 MB reclaimable (app 210 MB)
+       3) WhatsApp -- 69 MB reclaimable (app 180 MB)
+
+    Enter numbers to clean (e.g. 1,3,5), 'all', or press Enter to skip:
+
+Typing `1,3,5` selects three apps as easily as one; `all` selects everything shown;
+pressing Enter with no input skips cleanly. This removed the modifier-key requirement
+entirely and also simplified the implementation -- selection is now matched by array
+index instead of exact string comparison against AppleScript's returned list, so there's
+no risk of two apps with visually similar labels being mismatched.

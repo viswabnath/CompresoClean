@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="${1:-1.2}"
+VERSION="${1:-1.3}"
 APP_NAME="CompresoClean"
 DMG_NAME="${APP_NAME}_v${VERSION}.dmg"
 VOLUME_NAME="${APP_NAME} v${VERSION} by OneMark"

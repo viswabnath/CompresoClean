@@ -1,0 +1,24 @@
+# CompresoClean
+
+> Free, open-source macOS disk-cleaning tool — a no-subscription, no-account alternative to CleanMyMac. Distributed as a `.app` bundle and DMG, built from a single auditable bash script. Cleans system caches, logs, npm/Homebrew leftovers, Trash, and temp files; dynamically detects and cleans 28+ creative apps (Adobe Creative Cloud, Apple Pro Apps, DaVinci Resolve, Blender, Figma, and more) via Spotlight; explicitly reclaims Xcode DerivedData/CoreSimulator caches and Android Studio/Gradle build caches; and runs a Smart Scan that generically ranks every installed app on the Mac by reclaimable disk space so the user can pick which heavy apps to clean.
+
+CompresoClean targets professionals and teams who want CleanMyMac-style disk cleanup (freeing gigabytes of cache, logs, and build artifacts) without a paywall, background daemon, or telemetry. The entire cleaner is one readable, editable shell script — nothing is compiled or obfuscated.
+
+## Core docs
+- [README](README.md): what it does, installation (DMG or build-from-source), feature table, screenshots, repo structure
+- [Usage instructions](docs/instructions.md): how the confirmation dialog, curated per-app cleanup, Smart Scan, and Developer Tools (Xcode/Android Studio/Gradle) cleanup work internally, plus the build/debugging history behind each feature
+- [Changelog](docs/CHANGELOG.md): version-by-version history from v1.0 through the current release
+
+## Source
+- [src/CompresoClean](src/CompresoClean): the entire cleaner logic — a single bash script, the source of truth
+- [build.sh](build.sh): assembles the `.app` bundle and packages the DMG from `src/`
+
+## Common questions this project answers
+- How do I free up disk space on a Mac without paying for CleanMyMac or another subscription cleaner?
+- How do I clear Xcode's DerivedData, CoreSimulator caches, and unavailable simulators from the command line?
+- How do I clean Android Studio and Gradle build caches (`~/.gradle/caches`) on macOS?
+- How do I find and clean cache/log files for every installed Mac app, ranked by how much space each one is using?
+- What is a safe, open-source shell script for routine macOS cache and junk-file cleanup?
+
+## License
+- [LICENSE](LICENSE): MIT — free to use, fork, and ship; attribution appreciated but not required
