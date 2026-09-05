@@ -1,6 +1,6 @@
 # CompresoClean — Build Documentation
 **Built by Viswanath Bodasakurthi | OneMark Agency**
-**Date: April 2026 (updated August 2026) | Version: 1.3**
+**Date: April 2026 (updated September 2026) | Version: 1.4**
 
 ---
 
@@ -360,11 +360,68 @@ further:
 - **Android Studio / Gradle** — `~/Library/Caches/Google/AndroidStudio*`,
   `~/Library/Application Support/Google/AndroidStudio*/caches`, `~/.gradle/caches`
 
-Deliberately **not** touched: Xcode Archives (`~/Library/Developer/Xcode/Archives`) and
-Android AVDs (`~/.android/avd`). Both showed up as huge in the measurements above, but
+Deliberately **not** touched (as of v1.3): Xcode Archives (`~/Library/Developer/Xcode/Archives`)
+and Android AVDs (`~/.android/avd`). Both showed up as huge in the measurements above, but
 they aren't cache — Archives are your actual App Store submission builds, and an AVD is
 a configured virtual device with its own installed apps and data. Deleting either would
 destroy real work, not reclaim junk, so they're out of scope for automatic cleanup.
+
+### Follow-up (v1.4): simulators/AVDs were the single biggest miss, and a policy reversal
+
+A manual storage audit in September 2026 found CompresoClean's own `xcrun simctl delete
+unavailable` (v1.3) only removes device instances whose runtime is already missing —
+not the actual runtime OS disk images themselves, and not any device whose runtime is
+still installed and "available." Measured on the dev Mac:
+
+    iOS: CoreSimulator/Devices (device instances)         6.8 GB
+    iOS: CoreSimulator/Volumes (runtime OS disk images)     16 GB
+    Android: ~/.android/avd (AVDs)                          12 GB
+    Android SDK: system-images + emulator binary + skins  3.2 GB
+
+~38 GB combined, none of it touched by v1.3 — more than every other category in this
+document put together.
+
+This forced a genuine policy reversal from the v1.3 "AVDs are real user data, not cache"
+stance above. The reasoning that held for v1.3 (an AVD is a configured device with
+installed apps and data) is true, but in practice both an AVD and a simulator are fully
+regenerated on demand — Xcode/`sdkmanager` re-download the runtime image, and recreating
+a device from a saved config takes under a minute.
+
+Rather than making that reversal unconditional, it's a new prompt asked once up front:
+"Delete ALL iOS simulators + Android emulators? [y/N]" (defaults to No). Reasoning:
+"regenerable" is a good bar for what CAN be offered as reclaimable space, but a device you
+configured on purpose is still a bigger, more visible change than a build cache silently
+disappearing -- so it gets a real choice instead of joining DerivedData/Gradle caches in
+the unconditional pile. `xcrun simctl delete unavailable` → (if yes) `xcrun simctl delete
+all` + `xcrun simctl runtime delete all`; Android AVDs and the SDK's
+`system-images`/`emulator`/`skins` follow the same yes/no. Everything else in this
+section -- DerivedData, CoreSimulator/Gradle caches, each tool's own app cache -- is
+unaffected by the answer and still runs unconditionally. The SDK toolchain itself
+(build-tools, platform-tools, NDK, platforms) stays untouched either way, since it isn't
+emulator-specific and is still needed to build.
+
+Also added while investigating: `iOS DeviceSupport` (per-device debug symbols, 5.5 GB on
+the dev Mac, re-synced on next device connect) and a `CoreDevice` install cache — both
+found by the same audit and just as invisible to Smart Scan as Xcode/Gradle were in v1.3.
+
+### Follow-up (v1.4): hidden dotfile caches were invisible to Smart Scan too
+
+The same audit found a second, different-shaped gap: Smart Scan's per-app heuristic only
+ever looks under `~/Library/Caches`, `~/Library/Logs`, `~/Library/Saved Application
+State`, `~/Library/Containers/*/Data/Library/Caches`, and junk-named subfolders inside
+`~/Library/Application Support` — all rooted under `~/Library`. A growing number of CLI
+tools and Electron-style apps instead cache directly under `$HOME` as a dotfile
+(`~/.cache`, `~/.foo`), which no amount of tuning the `~/Library`-rooted heuristic would
+ever find. Measured: `~/.cache` 1.4 GB, `~/.pub-cache` (Flutter/Dart) 434 MB,
+`~/.dartServer` 468 MB, `~/.npm/_npx` 12 MB, and — the largest single item —
+`~/.gemini/antigravity-ide/browser_recordings` (AI-agent browser-session captures) at
+6.3 GB, plus a dated full-state `antigravity-backup` snapshot at 3.0 GB and
+`conversations` (chat history) at 903 MB.
+
+Fix: a new explicit section, same pattern as Developer Tools — check each known dotfile
+path exists, remove it, log it. `conversations` is chat history rather than pure cache,
+included anyway since it was consistently the largest recurring offender in practice;
+flagged in code and here in case that trade-off needs revisiting later.
 
 ### Follow-up: the multi-select dialog didn't feel like it supported multiple apps
 

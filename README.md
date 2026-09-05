@@ -22,7 +22,8 @@ Beyond the basics (system caches, logs, Trash, temp files), it goes after the di
 | Trash | Empties system Trash |
 | Creative Apps | Dynamically detects and cleans 28 creative apps across Adobe, Apple, 3D, design, audio, and photo categories |
 | Smart Scan | Scans every installed app (not just the curated list), ranks them by reclaimable cache/log/junk size, and lets you type which heavy apps to clean from a numbered list (`1,3,5`, `all`, or skip) — apps and real data are never touched |
-| Developer Tools | Explicit Xcode (DerivedData, CoreSimulator caches, unavailable simulators) and Android Studio/Gradle cache cleanup — these live outside Smart Scan's generic locations and can easily run into double-digit GB |
+| Developer Tools | Explicit Xcode (DerivedData, CoreSimulator caches, **all** simulator devices + runtime disk images, iOS DeviceSupport) and Android (Gradle caches, **all** AVDs + SDK system-images/emulator) cleanup — these live outside Smart Scan's generic locations and can easily run into double-digit GB. Simulators/AVDs are treated as regenerable, not permanent — see FAQ |
+| Hidden Dotfile Caches | CLI/Electron-style tools that cache directly under `~/.foo` instead of `~/Library/Caches` — npx, Flutter/Dart (`~/.pub-cache`, `~/.dartServer`), generic `~/.cache`, and Antigravity IDE's agent recordings/conversation history — invisible to Smart Scan, handled explicitly |
 | Dynamic Detection | Uses Spotlight (`mdfind`) — finds apps regardless of install location or version year |
 | Run Logs | Every cleanup logged to `~/.compresoclean.log` with timestamps |
 | Notifications | macOS notification shows MB freed after each run |
@@ -50,7 +51,7 @@ Beyond the basics (system caches, logs, Trash, temp files), it goes after the di
 
 ### Option 1 — Download DMG (Recommended)
 
-1. Go to [Releases](../../releases) and download `CompresoClean_v1.3.dmg`
+1. Go to [Releases](../../releases) and download `CompresoClean_v1.4.dmg`
 2. Open the DMG and drag `CompresoClean.app` to `/Applications`
 3. Double-click to run
 
@@ -65,7 +66,7 @@ chmod +x build.sh
 ./build.sh
 ```
 
-This assembles the `.app` bundle and outputs a DMG to `~/Desktop/CompresoClean_v1.3.dmg`.
+This assembles the `.app` bundle and outputs a DMG to `~/Desktop/CompresoClean_v1.4.dmg`.
 
 ---
 
@@ -136,6 +137,7 @@ Example entry:
 
 | Version | Date | Notes |
 |---|---|---|
+| v1.4 | 2026-09 | New "Delete ALL iOS simulators + Android emulators? [y/N]" prompt, asked once, before any device data is touched (defaults to No) — covers all iOS simulator devices + runtime images + DeviceSupport, and all Android AVDs + SDK system-images/emulator binary, not just orphaned ones; DerivedData/Gradle/Xcode/Android Studio caches still always run regardless of that answer; added CoreDevice install cache cleanup; added hidden dotfile cache cleanup (`~/.cache`, npx, Flutter/Dart pub-cache + dartServer, Antigravity IDE recordings/conversations/backups) that Smart Scan's `~/Library`-only scan can't see; fixed a silent partial-failure in the standard cache wipe when a cached app bundle contains read-only files |
 | v1.3 | 2026-08 | Smart Scan — generic scan of every installed app, ranks by reclaimable size, numbered-list multi-select cleaning, plus explicit Xcode/Android Studio/Gradle cache handling |
 | v1.2 | 2026-05 | Expanded to 28 creative apps, bundle ID detection, no-emoji terminal output |
 | v1.1 | 2025-06 | Dynamic app detection, macOS notifications, run logging |
@@ -154,10 +156,10 @@ Yes — MIT licensed, no subscription, no account, no telemetry. Download the DM
 It only ever deletes caches, logs, saved app state, and known junk folders — never an app itself, and never your documents, projects, or settings. Every curated app cleanup is gated on Spotlight actually detecting that app installed, and Smart Scan shows you exactly what it found before anything is removed.
 
 **Does it clean Xcode's DerivedData and simulator caches?**  
-Yes. It removes `~/Library/Developer/Xcode/DerivedData`, `~/Library/Developer/CoreSimulator/Caches`, and unavailable simulators — without touching your Xcode Archives (your actual App Store submission builds).
+Yes. `DerivedData` and `CoreSimulator/Caches` are always cleared. Actually deleting simulator *devices* and their runtime OS disk images (`xcrun simctl delete all` + `xcrun simctl runtime delete all` — often 10-20GB combined) is a separate, opt-in step: v1.4 asks once, up front, "Delete ALL iOS simulators + Android emulators? [y/N]" (defaults to No) before touching any device data, since both platforms' devices are grouped under the same yes/no choice. Say yes and it also clears per-device debug symbols under `iOS DeviceSupport`. It never touches Xcode Archives (your actual App Store submission builds) — those are real artifacts, not cache, and aren't part of this prompt at all.
 
 **Does it clean Android Studio and Gradle caches?**  
-Yes. It clears Android Studio's own app caches and `~/.gradle/caches` — without touching your AVDs (configured emulator devices), since those are real devices with installed apps and data, not cache.
+Android Studio's own app caches and `~/.gradle/caches` are always cleared. Your AVDs and the SDK's emulator system-images (often another 10-15GB) are covered by the same simulator/emulator prompt described above — say yes and both platforms' devices go together, say no and both are left alone. The Android SDK toolchain itself (build-tools, platform-tools, NDK, platforms) is never touched either way.
 
 **What is Smart Scan?**  
 A generic scan across every app installed on your Mac (not just the curated list), ranking each by how much cache/log/junk it's hoarding. It prints a numbered list in the terminal and you type which ones to clean (`1,3,5`, `all`, or skip) — nothing is cleaned automatically.

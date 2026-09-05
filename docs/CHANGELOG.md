@@ -4,6 +4,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.4] — 2026-09
+
+### Changed
+- **Simulators/emulators can now be fully wiped, not just orphaned ones** — a
+  real design-philosophy change from v1.3, which deliberately preserved
+  configured devices as "real user artifacts, not junk". Gated behind a new
+  prompt (see Added below) rather than made unconditional, since it's a
+  bigger behavior change than the rest of this release:
+  - iOS: `xcrun simctl delete unavailable` → `xcrun simctl delete all` +
+    `xcrun simctl runtime delete all` (the runtime OS disk images are often
+    the larger half — 10-20GB combined is common)
+  - Android: AVDs (`~/.android/avd`) and the SDK's `system-images`,
+    `emulator` binary, and `skins` (often another 10-15GB)
+  - Rationale: both are fully regenerated on demand (Xcode/`sdkmanager`
+    re-download the OS image; recreating a device takes under a minute), so
+    offering them as reclaimable space is more useful than v1.3's blanket
+    exclusion — but it's still a real behavior change from a device you may
+    have deliberately configured, so it isn't silently unconditional either.
+    The Android SDK toolchain itself (build-tools, platform-tools, NDK,
+    platforms) is never touched either way — only the emulator-specific
+    pieces.
+
+### Added
+- **"Delete ALL iOS simulators + Android emulators?" prompt** — asked once,
+  up front, before either platform's device data is touched; defaults to No.
+  DerivedData, CoreSimulator caches, Gradle caches, and each tool's own app
+  cache are unaffected by the answer and always run — only the actual
+  device/runtime wipe is gated on it.
+- **iOS DeviceSupport cleanup** — per-device debug symbols
+  (`~/Library/Developer/Xcode/iOS DeviceSupport`, `watchOS DeviceSupport`)
+  that Xcode downloads when a physical device connects; re-synced
+  automatically on next connect
+- **CoreDevice install cache** — stashed test-build install cache under
+  `~/Library/Containers/com.apple.CoreDevice.CoreDeviceService`
+- **Hidden dotfile cache cleanup** — a new section for CLI/Electron-style
+  tools that cache directly under `$HOME` as dotfiles instead of the
+  standard `~/Library/Caches`/`~/Library/Application Support` locations
+  Smart Scan actually checks, so they were previously invisible to it:
+  - `~/.cache` (generic)
+  - `~/.npm/_npx` (npx package-install cache)
+  - `~/.pub-cache`, `~/.dartServer` (Flutter/Dart)
+  - Antigravity IDE: `browser_recordings` (agent browser-session captures),
+    `conversations` (chat history — included since it's consistently the
+    largest recurring offender), and dated full-state backup snapshots
+
+### Fixed
+- The standard `~/Library/Caches/*` wipe would silently leave behind any
+  cached item containing read-only files (e.g. a cached signed `.app`
+  bundle) — `rm -rf` can't remove entries inside a directory it doesn't have
+  write permission on. Now `chmod -R u+w` runs first.
+
+---
+
 ## [1.3] — 2026-08
 
 ### Added

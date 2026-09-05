@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="1.3"
+VERSION="1.4"
 
 CONFIRM=$(osascript -e "button returned of (display dialog \"CompresoClean v${VERSION}\n\nReady to clean your Mac?\n\nDetects all installed creative apps automatically, plus a Smart Scan that finds your heaviest apps and lets you pick which ones to clean.\" buttons {\"Cancel\", \"Clean Now\"} default button \"Clean Now\" with title \"CompresoClean v${VERSION}\")")
 
@@ -62,7 +62,7 @@ echo "BEFORE:"; df -h /; echo ""
 
 # ── Standard cleanup ──────────────────────────────────────────────────────────
 echo "-- Standard Cleanup --"
-echo "  user caches..."  && rm -rf "$HOME"/Library/Caches/*        2>/dev/null && echo "  done"
+echo "  user caches..."  && chmod -R u+w "$HOME"/Library/Caches/*  2>/dev/null; rm -rf "$HOME"/Library/Caches/* 2>/dev/null && echo "  done"
 echo "  user logs..."    && rm -rf "$HOME"/Library/Logs/*          2>/dev/null && echo "  done"
 echo "  npm cache..."    && npm cache clean --force                2>/dev/null && echo "  done"
 echo "  homebrew..."     && brew cleanup -s                        2>/dev/null && echo "  done"
@@ -239,15 +239,43 @@ fi
 # GB and live outside the generic Caches/Logs/Containers locations that Smart
 # Scan checks, so they're handled explicitly here like Blender's cache dirs
 # above. Deliberately NOT touched: Xcode Archives (~/Library/Developer/Xcode/Archives
-# -- these are your actual App Store submission builds, not cache) and Android
-# AVDs (~/.android/avd -- configured virtual devices with their own installed
-# apps/data, not cache). Both are real user artifacts, not junk.
+# -- these are your actual App Store submission builds, not cache).
+#
+# As of v1.4, actual simulator/emulator devices (not just their caches) are an
+# opt-in choice, asked once up front -- see WIPE_DEVICES below. Pure build
+# caches (DerivedData, CoreSimulator/Gradle caches, each tool's own app cache)
+# always run regardless of that answer -- only the device/runtime wipe itself
+# (iOS simulators + runtime images + DeviceSupport, Android AVDs + SDK
+# emulator images) is gated on it.
+ANDROID_SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
+WIPE_DEVICES="n"
+if [ -n "$(detect_by_bundle "com.apple.dt.Xcode")" ] || [ -d "$ANDROID_SDK_DIR" ] || [ -d "$HOME/.android/avd" ]; then
+    echo "-- Simulators & Emulators --"
+    echo "  iOS Simulator devices + runtime OS images, and/or Android AVDs +"
+    echo "  SDK emulator images were found. Both are fully regenerated on next"
+    echo "  use (Xcode/sdkmanager re-download the OS image; recreating a"
+    echo "  device from its saved config takes under a minute) -- but if"
+    echo "  you'd rather keep them configured as-is, skip this."
+    read -rp "  Delete ALL iOS simulators + Android emulators? [y/N] " WIPE_INPUT
+    WIPE_DEVICES=$(printf '%s' "$WIPE_INPUT" | tr '[:upper:]' '[:lower:]')
+    echo ""
+fi
 
 if begin_app "Xcode" "$(detect_by_bundle "com.apple.dt.Xcode")"; then
     rm -rf "$HOME"/Library/Developer/Xcode/DerivedData
     rm -rf "$HOME"/Library/Developer/CoreSimulator/Caches
-    xcrun simctl delete unavailable 2>/dev/null
     rm -rf "$HOME"/Library/Caches/com.apple.dt.Xcode*
+    if [ "$WIPE_DEVICES" = "y" ]; then
+        # Simulator devices + their runtime OS disk images (the multi-GB part).
+        xcrun simctl delete all 2>/dev/null
+        xcrun simctl runtime delete all 2>/dev/null
+        # Per-device debug symbols Xcode downloads when a physical iPhone/iPad
+        # connects -- re-synced automatically next time that device connects.
+        rm -rf "$HOME"/Library/Developer/Xcode/iOS\ DeviceSupport/*
+        rm -rf "$HOME"/Library/Developer/Xcode/watchOS\ DeviceSupport/*
+        # iOS device install cache (stashed test-build installs via Xcode/CoreDevice)
+        rm -rf "$HOME"/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/Library/Caches/*
+    fi
     log_done
 fi
 
@@ -255,7 +283,69 @@ if begin_app "Android Studio" "$(detect_by_bundle "com.google.android.studio")";
     rm -rf "$HOME"/Library/Caches/Google/AndroidStudio*
     rm -rf "$HOME"/Library/Application\ Support/Google/AndroidStudio*/caches
     rm -rf "$HOME"/.gradle/caches
+    rm -rf "$HOME"/.gradle/wrapper/dists
     log_done
+fi
+
+# Android emulators -- gated on the SDK actually being present, independent of
+# whether Android Studio itself is installed (command-line-only SDK setups),
+# and on the same WIPE_DEVICES choice asked above. The SDK toolchain itself
+# (build-tools, platform-tools, NDK, platforms) is never touched either way --
+# only the emulator-specific pieces.
+if [ "$WIPE_DEVICES" = "y" ] && { [ -d "$ANDROID_SDK_DIR" ] || [ -d "$HOME/.android/avd" ]; }; then
+    echo "  found: Android Emulators"
+    rm -rf "$HOME"/.android/avd/*
+    rm -rf "$ANDROID_SDK_DIR/system-images"
+    rm -rf "$ANDROID_SDK_DIR/emulator"
+    rm -rf "$ANDROID_SDK_DIR/skins"
+    echo "  done:  Android Emulators"
+    echo "  [ok] Android Emulators" >> "$LOGFILE"
+fi
+
+# ── Hidden dotfile caches ─────────────────────────────────────────────────────
+# CLI tools and Electron-style apps increasingly store caches directly under
+# $HOME as dotfiles (~/.cache, ~/.foo) instead of the standard ~/Library/Caches
+# or ~/Library/Application Support locations Smart Scan below actually checks
+# -- so they're invisible to it and need explicit handling here.
+
+if [ -d "$HOME/.cache" ]; then
+    echo "  found: ~/.cache"
+    rm -rf "$HOME"/.cache/*
+    echo "  done:  ~/.cache"
+    echo "  [ok] ~/.cache" >> "$LOGFILE"
+fi
+
+if [ -d "$HOME/.npm/_npx" ]; then
+    echo "  found: npx cache"
+    rm -rf "$HOME"/.npm/_npx
+    echo "  done:  npx cache"
+    echo "  [ok] npx cache" >> "$LOGFILE"
+fi
+
+if [ -d "$HOME/.pub-cache" ]; then
+    echo "  found: Flutter/Dart pub-cache"
+    rm -rf "$HOME"/.pub-cache
+    echo "  done:  Flutter/Dart pub-cache"
+    echo "  [ok] Flutter/Dart pub-cache" >> "$LOGFILE"
+fi
+
+if [ -d "$HOME/.dartServer" ]; then
+    echo "  found: Dart analysis server cache"
+    rm -rf "$HOME"/.dartServer
+    echo "  done:  Dart analysis server cache"
+    echo "  [ok] Dart analysis server cache" >> "$LOGFILE"
+fi
+
+if [ -d "$HOME/.gemini/antigravity-ide" ]; then
+    echo "  found: Antigravity IDE caches"
+    # Agent browser-session recordings and dated full-state backups are pure
+    # disposable cache; conversation history has some retained value but is
+    # also the single largest recurring offender, so it's included here too.
+    rm -rf "$HOME"/.gemini/antigravity-ide/browser_recordings
+    rm -rf "$HOME"/.gemini/antigravity-ide/conversations
+    rm -rf "$HOME"/.gemini/antigravity-backup
+    echo "  done:  Antigravity IDE caches"
+    echo "  [ok] Antigravity IDE caches" >> "$LOGFILE"
 fi
 
 # ── Design ────────────────────────────────────────────────────────────────────
