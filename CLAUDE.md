@@ -14,8 +14,8 @@ CompresoClean is a macOS disk-cleaning app distributed as a `.app` bundle and DM
 nano src/CompresoClean
 
 # 2. Rebuild .app bundle and create DMG
-./build.sh          # uses default version (currently 1.2)
-./build.sh 1.3      # pass a version number to bump
+./build.sh          # uses default version (currently 1.4)
+./build.sh 1.5      # pass a version number to bump
 ```
 
 **Test the script directly without building:**
@@ -48,11 +48,11 @@ cat ~/.compresoclean.log
 To create the DMG manually without the script:
 ```bash
 hdiutil create \
-  -volname "CompresoClean v1.2 by OneMark" \
+  -volname "CompresoClean v1.4 by OneMark" \
   -srcfolder app/ \
   -ov \
   -format UDZO \
-  ~/Desktop/CompresoClean_v1.2.dmg
+  ~/Desktop/CompresoClean_v1.4.dmg
 ```
 
 After building, upload the DMG to GitHub Releases manually.
@@ -70,7 +70,9 @@ The outer script shows an `osascript` confirmation dialog, then writes the actua
 
 **App detection:** Uses `mdfind` (Spotlight) with two strategies — bundle ID (`detect_by_bundle`) preferred, display name (`detect_by_name`) as fallback. `detect_by_name` automatically tries year suffixes 2026 through 2022 before the bare name, handling Adobe's yearly versioning. `shopt -s nullglob` ensures unmatched glob patterns silently expand to nothing.
 
-**Versioning:** Version string lives in two places — `VERSION=` at the top of `src/CompresoClean`, and the default in `build.sh` (`VERSION="${1:-1.2}"`). Update both when bumping.
+**Safety modes & conventions:** `bash src/CompresoClean --dry-run` previews without deleting; `--trash` moves items under `$HOME` to `~/.Trash`. Inside the runner, never call `rm -rf` directly for cleanup -- use the `rmx` helper, which implements both modes (and dry-run size tallying). Use `say_done` / `log_ok` instead of echoing "done"/"[ok]" lines. Large-file and orphan finders are report-only. Because the runner is a quoted heredoc, test changes by extracting it and running it against a fake `$HOME` -- a real run wipes `/tmp/*`.
+
+**Versioning:** Version string lives in two places — `VERSION=` at the top of `src/CompresoClean`, and the default in `build.sh` (`VERSION="${1:-1.4}"`). Update both when bumping.
 
 ## Distribution
 

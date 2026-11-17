@@ -3,11 +3,16 @@
 # build.sh — CompresoClean build script
 # Assembles the .app bundle from src/ and packages it as a DMG
 # Usage: ./build.sh [version]
+#
+# Optional signing + notarization (removes the "Open Anyway" Gatekeeper warning;
+# needs a paid Apple Developer ID). Without these env vars the DMG is unsigned.
+#   CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+#   NOTARY_PROFILE="my-profile"   # created once via: xcrun notarytool store-credentials
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
-VERSION="${1:-1.3}"
+VERSION="${1:-1.4}"
 APP_NAME="CompresoClean"
 DMG_NAME="${APP_NAME}_v${VERSION}.dmg"
 VOLUME_NAME="${APP_NAME} v${VERSION} by OneMark"
@@ -117,6 +122,15 @@ cp -r "$APP_BUNDLE" "$BUILD_DIR/"
 [[ -f "${SCRIPT_DIR}/docs/instructions.md" ]] && cp "${SCRIPT_DIR}/docs/instructions.md" "$BUILD_DIR/"
 [[ -f "${SCRIPT_DIR}/README.md" ]] && cp "${SCRIPT_DIR}/README.md" "$BUILD_DIR/"
 
+# Sign the staged copy (not app/ in the repo, so the repo bundle stays unsigned)
+if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  echo "🔏  Signing app with: $CODESIGN_IDENTITY"
+  codesign --force --deep --options runtime --timestamp \
+    --sign "$CODESIGN_IDENTITY" "$BUILD_DIR/${APP_NAME}.app"
+  codesign --verify --deep --strict "$BUILD_DIR/${APP_NAME}.app"
+  echo "✅  App signed"
+fi
+
 # Remove old DMG if exists
 [[ -f "$OUTPUT_DMG" ]] && rm "$OUTPUT_DMG"
 
@@ -129,6 +143,19 @@ hdiutil create \
 
 # Clean temp dir
 rm -rf "$BUILD_DIR"
+
+# Sign and notarize the DMG
+if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$OUTPUT_DMG"
+  if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+    echo "📨  Submitting for notarization (this can take a few minutes)..."
+    xcrun notarytool submit "$OUTPUT_DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$OUTPUT_DMG"
+    echo "✅  DMG notarized and stapled"
+  else
+    echo "⚠️   CODESIGN_IDENTITY set but NOTARY_PROFILE is not — DMG is signed but not notarized."
+  fi
+fi
 
 echo ""
 echo "╔══════════════════════════════════════════╗"

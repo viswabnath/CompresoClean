@@ -159,7 +159,9 @@ were installed in non-default paths. Fixed by switching from hardcoded /Applicat
 to mdfind Spotlight search which finds apps anywhere on the Mac.**
 
 ### New features added
-- **Confirmation prompt** — a macOS dialog prompts "Clean Now / Cancel" before any cleanup runs
+- **Report-only finders** — after cleaning, the Large Files (>200 MB) and Orphaned App Data sections only list candidates; nothing in them is ever deleted
+- **Trash mode** — `--trash` or the runtime prompt routes `rmx` deletions under `$HOME` to `~/.Trash`
+- **Confirmation prompt** — a macOS dialog offers "Clean Now / Preview (Dry Run) / Cancel" before anything runs. Dry run executes the same flow but every deletion goes through the `rmx` helper, which records sizes instead of removing files; the summary reports the estimated space freed (brew cleanup and simulator runtime images are not counted)
 - **Dynamic app detection via mdfind** — Spotlight scans the entire Mac for installed creative
   apps regardless of where they are installed (see "Dynamic detection" section below)
 - **Creative app cleanups with skip if not found** — each of the five creative apps is cleaned

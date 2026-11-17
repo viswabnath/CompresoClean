@@ -28,6 +28,10 @@ Beyond the basics (system caches, logs, Trash, temp files), it goes after the di
 | Run Logs | Every cleanup logged to `~/.compresoclean.log` with timestamps |
 | Notifications | macOS notification shows MB freed after each run |
 | Confirmation Dialog | Asks before cleaning — no accidental wipes |
+| Trash Mode | `--trash` or the runtime prompt moves items to `~/.Trash` so a cleanup can be undone |
+| Package & Container Caches | pnpm store, Yarn caches, and Docker dangling images + build cache (containers/volumes untouched) |
+| Large Files & Orphans | Report-only: largest files over 200 MB and likely leftovers from uninstalled apps — never deleted |
+| Dry Run | "Preview (Dry Run)" button (or `bash src/CompresoClean --dry-run`) lists what would be removed and estimates the space freed — nothing is deleted |
 
 ---
 

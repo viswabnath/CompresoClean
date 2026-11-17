@@ -4,6 +4,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Dry-run mode** — a "Preview (Dry Run)" button on the confirmation dialog,
+  or `bash src/CompresoClean --dry-run`. Runs the full flow (including the
+  simulator and Smart Scan prompts) but deletes nothing: every `rm -rf` is
+  now an `rmx` helper that tallies sizes instead, items >= 10 MB are listed,
+  and the summary shows approximate MB reclaimable (nested/overlapping paths
+  counted once). Dry runs skip the per-item `[ok]` log lines.
+
+- **Trash mode** — `--trash` flag, or answer `y` to the new runtime prompt.
+  Anything under `$HOME` is moved to `~/.Trash` instead of deleted, so it can
+  be restored; space is reclaimed once the Trash is emptied. A failed move
+  leaves the item in place. Tool-driven cleanups (npm, brew, Docker, simctl)
+  and paths outside `$HOME` (e.g. `/tmp`) are still permanent.
+- **pnpm, Yarn (Berry/custom cache dir) and Docker cleanup** — pnpm store and
+  Yarn caches are removed; Docker only prunes dangling images and build cache
+  (containers and volumes are never touched).
+- **Large-file finder (report only)** — lists the 15 largest files over
+  200 MB under `$HOME`, with dates. Never deletes.
+- **Orphaned app data finder (report only)** — flags `~/Library` leftovers
+  (Application Support, Containers, Preferences, Saved State, HTTPStorages,
+  WebKit) whose vendor prefix matches no installed app. Heuristic; never
+  deletes.
+- **Optional signing + notarization in `build.sh`** — set `CODESIGN_IDENTITY`
+  and `NOTARY_PROFILE` to produce a signed, notarized, stapled DMG.
+
+### Fixed
+- Trash mode empties the existing Trash *before* moving new items into it
+  (found in a real run: it was deleting what it had just moved).
+- Runner banner, log line and notification showed "v1.3"; the version is now
+  passed from the launcher (`CC_VERSION`).
+
 ## [1.4] — 2026-09
 
 ### Changed

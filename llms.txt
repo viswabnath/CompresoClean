@@ -1,6 +1,6 @@
 # CompresoClean
 
-> Free, open-source macOS disk-cleaning tool — a no-subscription, no-account alternative to CleanMyMac. Distributed as a `.app` bundle and DMG, built from a single auditable bash script. Cleans system caches, logs, npm/Homebrew leftovers, Trash, and temp files; dynamically detects and cleans 28+ creative apps (Adobe Creative Cloud, Apple Pro Apps, DaVinci Resolve, Blender, Figma, and more) via Spotlight; explicitly reclaims Xcode DerivedData/CoreSimulator caches and Android Studio/Gradle build caches; and runs a Smart Scan that generically ranks every installed app on the Mac by reclaimable disk space so the user can pick which heavy apps to clean.
+> Free, open-source macOS disk-cleaning tool — a no-subscription, no-account alternative to CleanMyMac. Distributed as a `.app` bundle and DMG, built from a single auditable bash script. Cleans system caches, logs, npm/Homebrew leftovers, Trash, and temp files; dynamically detects and cleans 28+ creative apps (Adobe Creative Cloud, Apple Pro Apps, DaVinci Resolve, Blender, Figma, and more) via Spotlight; adds pnpm/Yarn/Docker cache cleanup, a dry-run preview mode, an optional recoverable Trash mode, and report-only large-file and orphaned-app-data finders; explicitly reclaims Xcode DerivedData/CoreSimulator caches and Android Studio/Gradle build caches; and runs a Smart Scan that generically ranks every installed app on the Mac by reclaimable disk space so the user can pick which heavy apps to clean.
 
 CompresoClean targets professionals and teams who want CleanMyMac-style disk cleanup (freeing gigabytes of cache, logs, and build artifacts) without a paywall, background daemon, or telemetry. The entire cleaner is one readable, editable shell script — nothing is compiled or obfuscated.
 
@@ -18,6 +18,7 @@ CompresoClean targets professionals and teams who want CleanMyMac-style disk cle
 - How do I clear Xcode's DerivedData, CoreSimulator caches, and unavailable simulators from the command line?
 - How do I clean Android Studio and Gradle build caches (`~/.gradle/caches`) on macOS?
 - How do I find and clean cache/log files for every installed Mac app, ranked by how much space each one is using?
+- How do I preview what a Mac cleaner would delete before it deletes anything (dry run)?
 - What is a safe, open-source shell script for routine macOS cache and junk-file cleanup?
 
 ## License

@@ -2,9 +2,27 @@
 
 VERSION="1.4"
 
-CONFIRM=$(osascript -e "button returned of (display dialog \"CompresoClean v${VERSION}\n\nReady to clean your Mac?\n\nDetects all installed creative apps automatically, plus a Smart Scan that finds your heaviest apps and lets you pick which ones to clean.\" buttons {\"Cancel\", \"Clean Now\"} default button \"Clean Now\" with title \"CompresoClean v${VERSION}\")")
+# --dry-run skips the dialog and previews only; the dialog also offers a
+# "Preview (Dry Run)" button. A dry run deletes nothing and reports what a
+# real run would remove and roughly how much space that would free.
+# --trash moves deletions to ~/.Trash (recoverable) instead of removing them.
+DRY_RUN=0
+TRASH_MODE=0
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        --trash)   TRASH_MODE=1 ;;
+    esac
+done
+if [ "$DRY_RUN" != "1" ]; then
+    CONFIRM=$(osascript -e "button returned of (display dialog \"CompresoClean v${VERSION}\n\nReady to clean your Mac?\n\nDetects all installed creative apps automatically, plus a Smart Scan that finds your heaviest apps and lets you pick which ones to clean.\n\nPreview shows what would be removed without deleting anything.\" buttons {\"Cancel\", \"Preview (Dry Run)\", \"Clean Now\"} default button \"Clean Now\" with title \"CompresoClean v${VERSION}\")")
 
-[ "$CONFIRM" != "Clean Now" ] && exit 0
+    case "$CONFIRM" in
+        "Clean Now") ;;
+        "Preview (Dry Run)") DRY_RUN=1 ;;
+        *) exit 0 ;;
+    esac
+fi
 
 # Write runner to home dir — /tmp gets wiped during cleanup
 cat > ~/.compresoclean_runner.sh << 'CLEANSCRIPT'
@@ -14,10 +32,73 @@ cat > ~/.compresoclean_runner.sh << 'CLEANSCRIPT'
 shopt -s nullglob
 
 LOGFILE="$HOME/.compresoclean.log"
+VERSION="${CC_VERSION:-1.4}"
+DRY_RUN="${DRY_RUN:-0}"
+DRY_TALLY="$HOME/.compresoclean_dry.tmp"
 
-echo "CompresoClean v1.3 -- by Viswanath"
+echo "CompresoClean v${VERSION} -- by Viswanath"
+[ "$DRY_RUN" = "1" ] && echo "*** DRY RUN -- nothing will be deleted ***"
 echo "======================================="
 echo ""
+
+# ── Dry-run aware helpers ─────────────────────────────────────────────────────
+# rmx replaces `rm -rf` everywhere. In a dry run it records each existing path's
+# size instead of deleting it; items >= 10 MB are listed individually.
+> "$DRY_TALLY"
+TRASH_MODE="${TRASH_MODE:-0}"
+RMX_PERMANENT=0   # `RMX_PERMANENT=1 rmx ...` forces a real delete (used to empty the Trash)
+rmx() {
+    local p kb dest name
+    if [ "$DRY_RUN" != "1" ]; then
+        if [ "$TRASH_MODE" != "1" ] || [ "$RMX_PERMANENT" = "1" ]; then
+            rm -rf "$@"
+            return 0
+        fi
+        # Trash mode: move anything under $HOME into ~/.Trash so it can be put
+        # back. Paths outside $HOME (e.g. /tmp) are removed normally. If a move
+        # fails, the item is left in place rather than silently deleted.
+        for p in "$@"; do
+            [ -e "$p" ] || [ -L "$p" ] || continue
+            case "$p" in
+                "$HOME"/.Trash/*) rm -rf "$p" ;;
+                "$HOME"/*)
+                    name=$(basename "$p"); name="${name#.}"
+                    dest="$HOME/.Trash/${name} $(date +%H%M%S)-$RANDOM"
+                    mv "$p" "$dest" 2>/dev/null || echo "    kept (could not move to Trash): $p"
+                    ;;
+                *) rm -rf "$p" ;;
+            esac
+        done
+        return 0
+    fi
+    for p in "$@"; do
+        [ -e "$p" ] || [ -L "$p" ] || continue
+        kb=$(du -sk "$p" 2>/dev/null | awk '{print $1}')
+        kb=${kb:-0}
+        printf '%s\t%s\t%s\n' "${#p}" "$kb" "$p" >> "$DRY_TALLY"
+        [ "$kb" -ge 10240 ] && printf '    would remove: %s (%s MB)\n' "$p" "$((kb / 1024))"
+    done
+    return 0
+}
+
+# Total reclaimable KB for a dry run. Counts each path once and skips anything
+# nested inside an already-counted directory (e.g. Caches/* then Caches/Google/x).
+dry_total_kb() {
+    sort -n -t$'\t' -k1,1 "$DRY_TALLY" | awk -F'\t' '
+        { p=$3; skip=0; q=p
+          if (p in kept) skip=1
+          while (!skip && (i=match(q, "/[^/]*$")) > 1) { q=substr(q, 1, i-1); if (q in kept) skip=1 }
+          if (!skip) { kept[p]=1; sum+=$2 } }
+        END { print sum+0 }'
+}
+
+say_done() {
+    if [ "$DRY_RUN" = "1" ]; then echo "  would clean: $1"; else echo "  done:  $1"; fi
+}
+
+log_ok() {
+    [ "$DRY_RUN" = "1" ] || echo "  [ok] $1" >> "$LOGFILE"
+}
 
 # ── Detection helpers ─────────────────────────────────────────────────────────
 
@@ -52,9 +133,19 @@ begin_app() {
 }
 
 log_done() {
-    echo "  done:  $_APP_NAME"
-    echo "  [ok] $_APP_NAME" >> "$LOGFILE"
+    say_done "$_APP_NAME"
+    log_ok "$_APP_NAME"
 }
+
+# ── Trash mode ────────────────────────────────────────────────────────────────
+# Optional: move cleaned items to the Trash instead of deleting them, so a
+# mistake can be undone. Space is only reclaimed once the Trash is emptied.
+if [ "$DRY_RUN" != "1" ] && [ "$TRASH_MODE" != "1" ]; then
+    read -rp "Move items to Trash (recoverable) instead of deleting permanently? [y/N] " TRASH_INPUT
+    [ "$(printf '%s' "$TRASH_INPUT" | tr '[:upper:]' '[:lower:]')" = "y" ] && TRASH_MODE=1
+    echo ""
+fi
+[ "$TRASH_MODE" = "1" ] && [ "$DRY_RUN" != "1" ] && echo "*** TRASH MODE -- items are moved to ~/.Trash; empty it to reclaim space ***" && echo ""
 
 # ── Disk baseline ─────────────────────────────────────────────────────────────
 BEFORE_AVAIL=$(df / | tail -1 | awk '{print $4}')
@@ -62,12 +153,62 @@ echo "BEFORE:"; df -h /; echo ""
 
 # ── Standard cleanup ──────────────────────────────────────────────────────────
 echo "-- Standard Cleanup --"
-echo "  user caches..."  && chmod -R u+w "$HOME"/Library/Caches/*  2>/dev/null; rm -rf "$HOME"/Library/Caches/* 2>/dev/null && echo "  done"
-echo "  user logs..."    && rm -rf "$HOME"/Library/Logs/*          2>/dev/null && echo "  done"
-echo "  npm cache..."    && npm cache clean --force                2>/dev/null && echo "  done"
-echo "  homebrew..."     && brew cleanup -s                        2>/dev/null && echo "  done"
-echo "  trash..."        && rm -rf "$HOME"/.Trash/*                2>/dev/null && echo "  done"
-echo "  temp files..."   && rm -rf /tmp/* /private/var/tmp/*       2>/dev/null && echo "  done"
+# Empty the existing Trash first: in Trash mode, items moved there below must survive.
+echo "  trash..."        && RMX_PERMANENT=1 rmx "$HOME"/.Trash/* && say_done "trash"
+echo "  user caches..."  && { [ "$DRY_RUN" = "1" ] || chmod -R u+w "$HOME"/Library/Caches/* 2>/dev/null; }; rmx "$HOME"/Library/Caches/* && say_done "user caches"
+echo "  user logs..."    && rmx "$HOME"/Library/Logs/* && say_done "user logs"
+echo "  npm cache..."
+if [ "$DRY_RUN" = "1" ]; then
+    rmx "$HOME"/.npm/_cacache && say_done "npm cache"
+else
+    npm cache clean --force 2>/dev/null && echo "  done"
+fi
+echo "  homebrew..."
+if [ "$DRY_RUN" = "1" ]; then
+    echo "  would run: brew cleanup -s (size not estimated)"
+else
+    brew cleanup -s 2>/dev/null && echo "  done"
+fi
+echo "  temp files..."   && rmx /tmp/* /private/var/tmp/* && say_done "temp files"
+echo ""
+
+# ── Package manager & container caches ────────────────────────────────────────
+echo "-- Package Manager & Container Caches --"
+
+if command -v pnpm >/dev/null 2>&1 || [ -d "$HOME/Library/pnpm/store" ]; then
+    echo "  found: pnpm store"
+    PNPM_STORE=$(pnpm store path 2>/dev/null)
+    rmx "${PNPM_STORE:-$HOME/Library/pnpm/store}"
+    say_done "pnpm store"
+    log_ok "pnpm store"
+fi
+
+# Yarn classic's cache (~/Library/Caches/Yarn) is already covered by user
+# caches above; this adds Yarn Berry's global cache and a custom cache dir.
+if command -v yarn >/dev/null 2>&1 || [ -d "$HOME/.yarn/berry/cache" ]; then
+    echo "  found: yarn cache"
+    YARN_CACHE=$(yarn cache dir 2>/dev/null | tail -1)
+    [ -n "$YARN_CACHE" ] && [ -d "$YARN_CACHE" ] && rmx "$YARN_CACHE"
+    rmx "$HOME"/.yarn/berry/cache
+    say_done "yarn cache"
+    log_ok "yarn cache"
+fi
+
+# Docker: only dangling images and build cache. Running/stopped containers and
+# volumes are never touched. Docker Desktop's disk image does not shrink on its
+# own after a prune; the space is reusable inside Docker.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    echo "  found: Docker"
+    if [ "$DRY_RUN" = "1" ]; then
+        docker system df 2>/dev/null | sed 's/^/    /'
+        echo "  would run: docker image prune -f; docker builder prune -f (sizes above, not added to total)"
+    else
+        docker image prune -f >/dev/null 2>&1
+        docker builder prune -f >/dev/null 2>&1
+        say_done "Docker (dangling images + build cache)"
+        log_ok "Docker"
+    fi
+fi
 echo ""
 
 # ── Creative app cleanup ──────────────────────────────────────────────────────
@@ -76,133 +217,133 @@ echo "-- Creative App Cleanup --"
 # ── Adobe ─────────────────────────────────────────────────────────────────────
 
 if begin_app "Adobe Photoshop" "$(detect_by_name "Adobe Photoshop")"; then
-    rm -rf "$HOME"/Library/Application\ Support/Adobe/Adobe\ Photoshop*/Adobe\ Photoshop*\ Settings/Temp
-    rm -rf "$HOME"/Library/Caches/com.adobe.photoshop*
+    rmx "$HOME"/Library/Application\ Support/Adobe/Adobe\ Photoshop*/Adobe\ Photoshop*\ Settings/Temp
+    rmx "$HOME"/Library/Caches/com.adobe.photoshop*
     log_done
 fi
 
 if begin_app "Adobe Illustrator" "$(detect_by_name "Adobe Illustrator")"; then
-    rm -rf "$HOME"/Library/Application\ Support/Adobe/Adobe\ Illustrator*/x64/temp
-    rm -rf "$HOME"/Library/Caches/com.adobe.illustrator*
+    rmx "$HOME"/Library/Application\ Support/Adobe/Adobe\ Illustrator*/x64/temp
+    rmx "$HOME"/Library/Caches/com.adobe.illustrator*
     log_done
 fi
 
 if begin_app "Adobe InDesign" "$(detect_by_name "Adobe InDesign")"; then
-    rm -rf "$HOME"/Library/Caches/com.adobe.InDesign*
+    rmx "$HOME"/Library/Caches/com.adobe.InDesign*
     log_done
 fi
 
 if begin_app "Adobe After Effects" "$(detect_by_name "After Effects")"; then
-    rm -rf "$HOME"/Library/Application\ Support/Adobe/After\ Effects/*/disk\ cache
-    rm -rf "$HOME"/Library/Application\ Support/Adobe/After\ Effects/*/Cache\ Files
-    rm -rf "$HOME"/Library/Caches/com.adobe.AfterEffects*
+    rmx "$HOME"/Library/Application\ Support/Adobe/After\ Effects/*/disk\ cache
+    rmx "$HOME"/Library/Application\ Support/Adobe/After\ Effects/*/Cache\ Files
+    rmx "$HOME"/Library/Caches/com.adobe.AfterEffects*
     log_done
 fi
 
 if begin_app "Adobe Premiere Pro" "$(detect_by_name "Adobe Premiere Pro")"; then
-    rm -rf "$HOME"/Library/Application\ Support/Adobe/Common/Media\ Cache
-    rm -rf "$HOME"/Library/Application\ Support/Adobe/Common/Media\ Cache\ Files
-    rm -rf "$HOME"/Library/Caches/com.adobe.AdobePremierePro*
+    rmx "$HOME"/Library/Application\ Support/Adobe/Common/Media\ Cache
+    rmx "$HOME"/Library/Application\ Support/Adobe/Common/Media\ Cache\ Files
+    rmx "$HOME"/Library/Caches/com.adobe.AdobePremierePro*
     log_done
 fi
 
 if begin_app "Adobe Media Encoder" "$(detect_by_name "Adobe Media Encoder")"; then
-    rm -rf "$HOME"/Library/Caches/com.adobe.AdobeMediaEncoder*
+    rmx "$HOME"/Library/Caches/com.adobe.AdobeMediaEncoder*
     log_done
 fi
 
 if begin_app "Adobe Lightroom Classic" "$(detect_by_bundle "com.adobe.LightroomClassicCC7")"; then
-    rm -rf "$HOME"/Library/Caches/com.adobe.LightroomClassicCC7*
-    rm -rf "$HOME"/Library/Application\ Support/Adobe/Lightroom/Cache
+    rmx "$HOME"/Library/Caches/com.adobe.LightroomClassicCC7*
+    rmx "$HOME"/Library/Application\ Support/Adobe/Lightroom/Cache
     log_done
 fi
 
 if begin_app "Adobe Lightroom" "$(detect_by_bundle "com.adobe.lightroomCC")"; then
-    rm -rf "$HOME"/Library/Caches/com.adobe.lightroomCC*
+    rmx "$HOME"/Library/Caches/com.adobe.lightroomCC*
     log_done
 fi
 
 if begin_app "Adobe Audition" "$(detect_by_name "Adobe Audition")"; then
-    rm -rf "$HOME"/Library/Application\ Support/Adobe/Audition/*/Scratch\ Disks
-    rm -rf "$HOME"/Library/Caches/com.adobe.Audition*
+    rmx "$HOME"/Library/Application\ Support/Adobe/Audition/*/Scratch\ Disks
+    rmx "$HOME"/Library/Caches/com.adobe.Audition*
     log_done
 fi
 
 if begin_app "Adobe Bridge" "$(detect_by_name "Adobe Bridge")"; then
-    rm -rf "$HOME"/Library/Caches/com.adobe.Bridge*
+    rmx "$HOME"/Library/Caches/com.adobe.Bridge*
     log_done
 fi
 
 if begin_app "Adobe Character Animator" "$(detect_by_name "Adobe Character Animator")"; then
-    rm -rf "$HOME"/Library/Caches/com.adobe.character-animator*
+    rmx "$HOME"/Library/Caches/com.adobe.character-animator*
     log_done
 fi
 
 if begin_app "Adobe Animate" "$(detect_by_name "Adobe Animate")"; then
-    rm -rf "$HOME"/Library/Caches/com.adobe.Animate*
+    rmx "$HOME"/Library/Caches/com.adobe.Animate*
     log_done
 fi
 
 if begin_app "Adobe Acrobat" "$(detect_by_bundle "com.adobe.Acrobat.Pro")"; then
-    rm -rf "$HOME"/Library/Caches/com.adobe.Acrobat*
+    rmx "$HOME"/Library/Caches/com.adobe.Acrobat*
     log_done
 fi
 
 if begin_app "Adobe XD / Express" "$(detect_by_bundle "com.adobe.adobexd" 2>/dev/null || detect_by_name "Adobe Express")"; then
-    rm -rf "$HOME"/Library/Caches/com.adobe.adobexd*
-    rm -rf "$HOME"/Library/Caches/com.adobe.Adobe-Express*
+    rmx "$HOME"/Library/Caches/com.adobe.adobexd*
+    rmx "$HOME"/Library/Caches/com.adobe.Adobe-Express*
     log_done
 fi
 
 # ── Apple Pro Apps ────────────────────────────────────────────────────────────
 
 if begin_app "Final Cut Pro" "$(detect_by_bundle "com.apple.FinalCut")"; then
-    rm -rf "$HOME"/Movies/Final\ Cut\ Backups
-    rm -rf "$HOME"/Library/Caches/com.apple.FinalCut*
+    rmx "$HOME"/Movies/Final\ Cut\ Backups
+    rmx "$HOME"/Library/Caches/com.apple.FinalCut*
     log_done
 fi
 
 if begin_app "Logic Pro" "$(detect_by_bundle "com.apple.logic10")"; then
-    rm -rf "$HOME"/Library/Caches/com.apple.logic10*
-    rm -rf "$HOME"/Library/Application\ Support/Logic/Cache
+    rmx "$HOME"/Library/Caches/com.apple.logic10*
+    rmx "$HOME"/Library/Application\ Support/Logic/Cache
     log_done
 fi
 
 if begin_app "GarageBand" "$(detect_by_bundle "com.apple.GarageBand")"; then
-    rm -rf "$HOME"/Library/Caches/com.apple.GarageBand*
+    rmx "$HOME"/Library/Caches/com.apple.GarageBand*
     log_done
 fi
 
 if begin_app "Motion" "$(detect_by_bundle "com.apple.motionapp")"; then
-    rm -rf "$HOME"/Library/Caches/com.apple.motionapp*
+    rmx "$HOME"/Library/Caches/com.apple.motionapp*
     log_done
 fi
 
 if begin_app "Compressor" "$(detect_by_bundle "com.apple.compressor")"; then
-    rm -rf "$HOME"/Library/Caches/com.apple.Compressor*
+    rmx "$HOME"/Library/Caches/com.apple.Compressor*
     log_done
 fi
 
 # ── Video / NLE ───────────────────────────────────────────────────────────────
 
 if begin_app "DaVinci Resolve" "$(detect_by_name "DaVinci Resolve")"; then
-    rm -rf "$HOME"/Library/Application\ Support/Blackmagic\ Design/DaVinci\ Resolve/Support/CacheClip
-    rm -rf "$HOME"/Library/Caches/com.blackmagic-design.DaVinciResolve*
+    rmx "$HOME"/Library/Application\ Support/Blackmagic\ Design/DaVinci\ Resolve/Support/CacheClip
+    rmx "$HOME"/Library/Caches/com.blackmagic-design.DaVinciResolve*
     log_done
 fi
 
 if begin_app "ScreenFlow" "$(detect_by_bundle "com.telestream.mac.ScreenFlow9" 2>/dev/null || detect_by_name "ScreenFlow")"; then
-    rm -rf "$HOME"/Library/Caches/com.telestream.mac.ScreenFlow*
+    rmx "$HOME"/Library/Caches/com.telestream.mac.ScreenFlow*
     log_done
 fi
 
 if begin_app "Camtasia" "$(detect_by_bundle "com.techsmith.camtasia")"; then
-    rm -rf "$HOME"/Library/Caches/com.techsmith.camtasia*
+    rmx "$HOME"/Library/Caches/com.techsmith.camtasia*
     log_done
 fi
 
 if begin_app "HandBrake" "$(detect_by_bundle "fr.handbrake.HandBrake")"; then
-    rm -rf "$HOME"/Library/Caches/fr.handbrake.HandBrake*
+    rmx "$HOME"/Library/Caches/fr.handbrake.HandBrake*
     log_done
 fi
 
@@ -211,26 +352,26 @@ fi
 # Blender: cache dirs are version-numbered (e.g. 5.0/cache/) -- scan dynamically
 if begin_app "Blender" "$(detect_by_bundle "org.blenderfoundation.blender" 2>/dev/null || detect_by_name "Blender")"; then
     find "$HOME/Library/Application Support/Blender" -mindepth 2 -maxdepth 2 -type d -name "cache" 2>/dev/null | while read -r d; do
-        rm -rf "$d" && echo "  removed: $d"
+        rmx "$d" && echo "  removed: $d"
     done
-    rm -rf /tmp/blender_*
+    rmx /tmp/blender_*
     log_done
 fi
 
 if begin_app "Cinema 4D" "$(detect_by_name "Cinema 4D")"; then
-    rm -rf "$HOME"/Library/Caches/com.maxon.Cinema4D*
-    rm -rf "$HOME"/Library/Application\ Support/Maxon/Maxon\ Cinema\ 4D*/cache
+    rmx "$HOME"/Library/Caches/com.maxon.Cinema4D*
+    rmx "$HOME"/Library/Application\ Support/Maxon/Maxon\ Cinema\ 4D*/cache
     log_done
 fi
 
 if begin_app "Autodesk Maya" "$(detect_by_bundle "com.autodesk.maya" 2>/dev/null || detect_by_name "Maya")"; then
-    rm -rf "$HOME"/Library/Caches/com.autodesk.maya*
+    rmx "$HOME"/Library/Caches/com.autodesk.maya*
     log_done
 fi
 
 if begin_app "Houdini" "$(detect_by_name "Houdini" 2>/dev/null || detect_by_name "Houdini FX")"; then
-    rm -rf "$HOME"/Library/Caches/com.sidefx.*
-    rm -rf /tmp/houdini_*
+    rmx "$HOME"/Library/Caches/com.sidefx.*
+    rmx /tmp/houdini_*
     log_done
 fi
 
@@ -262,28 +403,33 @@ if [ -n "$(detect_by_bundle "com.apple.dt.Xcode")" ] || [ -d "$ANDROID_SDK_DIR" 
 fi
 
 if begin_app "Xcode" "$(detect_by_bundle "com.apple.dt.Xcode")"; then
-    rm -rf "$HOME"/Library/Developer/Xcode/DerivedData
-    rm -rf "$HOME"/Library/Developer/CoreSimulator/Caches
-    rm -rf "$HOME"/Library/Caches/com.apple.dt.Xcode*
+    rmx "$HOME"/Library/Developer/Xcode/DerivedData
+    rmx "$HOME"/Library/Developer/CoreSimulator/Caches
+    rmx "$HOME"/Library/Caches/com.apple.dt.Xcode*
     if [ "$WIPE_DEVICES" = "y" ]; then
         # Simulator devices + their runtime OS disk images (the multi-GB part).
-        xcrun simctl delete all 2>/dev/null
-        xcrun simctl runtime delete all 2>/dev/null
+        if [ "$DRY_RUN" = "1" ]; then
+            rmx "$HOME"/Library/Developer/CoreSimulator/Devices
+            echo "  would run: xcrun simctl runtime delete all (runtime image size not estimated)"
+        else
+            xcrun simctl delete all 2>/dev/null
+            xcrun simctl runtime delete all 2>/dev/null
+        fi
         # Per-device debug symbols Xcode downloads when a physical iPhone/iPad
         # connects -- re-synced automatically next time that device connects.
-        rm -rf "$HOME"/Library/Developer/Xcode/iOS\ DeviceSupport/*
-        rm -rf "$HOME"/Library/Developer/Xcode/watchOS\ DeviceSupport/*
+        rmx "$HOME"/Library/Developer/Xcode/iOS\ DeviceSupport/*
+        rmx "$HOME"/Library/Developer/Xcode/watchOS\ DeviceSupport/*
         # iOS device install cache (stashed test-build installs via Xcode/CoreDevice)
-        rm -rf "$HOME"/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/Library/Caches/*
+        rmx "$HOME"/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/Library/Caches/*
     fi
     log_done
 fi
 
 if begin_app "Android Studio" "$(detect_by_bundle "com.google.android.studio")"; then
-    rm -rf "$HOME"/Library/Caches/Google/AndroidStudio*
-    rm -rf "$HOME"/Library/Application\ Support/Google/AndroidStudio*/caches
-    rm -rf "$HOME"/.gradle/caches
-    rm -rf "$HOME"/.gradle/wrapper/dists
+    rmx "$HOME"/Library/Caches/Google/AndroidStudio*
+    rmx "$HOME"/Library/Application\ Support/Google/AndroidStudio*/caches
+    rmx "$HOME"/.gradle/caches
+    rmx "$HOME"/.gradle/wrapper/dists
     log_done
 fi
 
@@ -294,12 +440,12 @@ fi
 # only the emulator-specific pieces.
 if [ "$WIPE_DEVICES" = "y" ] && { [ -d "$ANDROID_SDK_DIR" ] || [ -d "$HOME/.android/avd" ]; }; then
     echo "  found: Android Emulators"
-    rm -rf "$HOME"/.android/avd/*
-    rm -rf "$ANDROID_SDK_DIR/system-images"
-    rm -rf "$ANDROID_SDK_DIR/emulator"
-    rm -rf "$ANDROID_SDK_DIR/skins"
-    echo "  done:  Android Emulators"
-    echo "  [ok] Android Emulators" >> "$LOGFILE"
+    rmx "$HOME"/.android/avd/*
+    rmx "$ANDROID_SDK_DIR/system-images"
+    rmx "$ANDROID_SDK_DIR/emulator"
+    rmx "$ANDROID_SDK_DIR/skins"
+    say_done "Android Emulators"
+    log_ok "Android Emulators"
 fi
 
 # ── Hidden dotfile caches ─────────────────────────────────────────────────────
@@ -310,30 +456,30 @@ fi
 
 if [ -d "$HOME/.cache" ]; then
     echo "  found: ~/.cache"
-    rm -rf "$HOME"/.cache/*
-    echo "  done:  ~/.cache"
-    echo "  [ok] ~/.cache" >> "$LOGFILE"
+    rmx "$HOME"/.cache/*
+    say_done "~/.cache"
+    log_ok "~/.cache"
 fi
 
 if [ -d "$HOME/.npm/_npx" ]; then
     echo "  found: npx cache"
-    rm -rf "$HOME"/.npm/_npx
-    echo "  done:  npx cache"
-    echo "  [ok] npx cache" >> "$LOGFILE"
+    rmx "$HOME"/.npm/_npx
+    say_done "npx cache"
+    log_ok "npx cache"
 fi
 
 if [ -d "$HOME/.pub-cache" ]; then
     echo "  found: Flutter/Dart pub-cache"
-    rm -rf "$HOME"/.pub-cache
-    echo "  done:  Flutter/Dart pub-cache"
-    echo "  [ok] Flutter/Dart pub-cache" >> "$LOGFILE"
+    rmx "$HOME"/.pub-cache
+    say_done "Flutter/Dart pub-cache"
+    log_ok "Flutter/Dart pub-cache"
 fi
 
 if [ -d "$HOME/.dartServer" ]; then
     echo "  found: Dart analysis server cache"
-    rm -rf "$HOME"/.dartServer
-    echo "  done:  Dart analysis server cache"
-    echo "  [ok] Dart analysis server cache" >> "$LOGFILE"
+    rmx "$HOME"/.dartServer
+    say_done "Dart analysis server cache"
+    log_ok "Dart analysis server cache"
 fi
 
 if [ -d "$HOME/.gemini/antigravity-ide" ]; then
@@ -341,63 +487,63 @@ if [ -d "$HOME/.gemini/antigravity-ide" ]; then
     # Agent browser-session recordings and dated full-state backups are pure
     # disposable cache; conversation history has some retained value but is
     # also the single largest recurring offender, so it's included here too.
-    rm -rf "$HOME"/.gemini/antigravity-ide/browser_recordings
-    rm -rf "$HOME"/.gemini/antigravity-ide/conversations
-    rm -rf "$HOME"/.gemini/antigravity-backup
-    echo "  done:  Antigravity IDE caches"
-    echo "  [ok] Antigravity IDE caches" >> "$LOGFILE"
+    rmx "$HOME"/.gemini/antigravity-ide/browser_recordings
+    rmx "$HOME"/.gemini/antigravity-ide/conversations
+    rmx "$HOME"/.gemini/antigravity-backup
+    say_done "Antigravity IDE caches"
+    log_ok "Antigravity IDE caches"
 fi
 
 # ── Design ────────────────────────────────────────────────────────────────────
 
 if begin_app "Sketch" "$(detect_by_bundle "com.bohemiancoding.sketch3")"; then
-    rm -rf "$HOME"/Library/Caches/com.bohemiancoding.sketch3*
+    rmx "$HOME"/Library/Caches/com.bohemiancoding.sketch3*
     log_done
 fi
 
 if begin_app "Figma" "$(detect_by_bundle "com.figma.Desktop")"; then
-    rm -rf "$HOME"/Library/Caches/com.figma.Desktop*
-    rm -rf "$HOME"/Library/Application\ Support/Figma/Cache
-    rm -rf "$HOME"/Library/Application\ Support/Figma/Code\ Cache
+    rmx "$HOME"/Library/Caches/com.figma.Desktop*
+    rmx "$HOME"/Library/Application\ Support/Figma/Cache
+    rmx "$HOME"/Library/Application\ Support/Figma/Code\ Cache
     log_done
 fi
 
 if begin_app "Affinity Photo" "$(detect_by_bundle "com.seriflabs.affinityphoto")"; then
-    rm -rf "$HOME"/Library/Caches/com.seriflabs.affinityphoto*
+    rmx "$HOME"/Library/Caches/com.seriflabs.affinityphoto*
     log_done
 fi
 
 if begin_app "Affinity Designer" "$(detect_by_bundle "com.seriflabs.affinitydesigner")"; then
-    rm -rf "$HOME"/Library/Caches/com.seriflabs.affinitydesigner*
+    rmx "$HOME"/Library/Caches/com.seriflabs.affinitydesigner*
     log_done
 fi
 
 if begin_app "Affinity Publisher" "$(detect_by_bundle "com.seriflabs.affinitypublisher")"; then
-    rm -rf "$HOME"/Library/Caches/com.seriflabs.affinitypublisher*
+    rmx "$HOME"/Library/Caches/com.seriflabs.affinitypublisher*
     log_done
 fi
 
 # ── Audio ─────────────────────────────────────────────────────────────────────
 
 if begin_app "Ableton Live" "$(detect_by_bundle "com.ableton.live" 2>/dev/null || detect_by_name "Ableton Live")"; then
-    rm -rf "$HOME"/Library/Caches/com.ableton.live*
+    rmx "$HOME"/Library/Caches/com.ableton.live*
     log_done
 fi
 
 if begin_app "Pro Tools" "$(detect_by_bundle "com.avid.ProTools" 2>/dev/null || detect_by_name "Pro Tools")"; then
-    rm -rf "$HOME"/Library/Caches/com.avid.ProTools*
+    rmx "$HOME"/Library/Caches/com.avid.ProTools*
     log_done
 fi
 
 # ── Photo editing ─────────────────────────────────────────────────────────────
 
 if begin_app "Capture One" "$(detect_by_bundle "com.phaseone.captureone" 2>/dev/null || detect_by_name "Capture One")"; then
-    rm -rf "$HOME"/Library/Caches/com.phaseone.captureone*
+    rmx "$HOME"/Library/Caches/com.phaseone.captureone*
     log_done
 fi
 
 if begin_app "Luminar" "$(detect_by_bundle "com.skylum.luminar" 2>/dev/null || detect_by_name "Luminar")"; then
-    rm -rf "$HOME"/Library/Caches/com.skylum.luminar*
+    rmx "$HOME"/Library/Caches/com.skylum.luminar*
     log_done
 fi
 
@@ -442,7 +588,9 @@ junk_paths_for_app() {
 }
 
 SCAN_REPORT="$HOME/.compresoclean_scan.tmp"
+INSTALLED_IDS="$HOME/.compresoclean_ids.tmp"   # reused by the orphan finder below
 > "$SCAN_REPORT"
+> "$INSTALLED_IDS"
 
 # .app dirs at any depth, but pruned so we don't descend into a match
 # (handles nested installs like "Adobe Photoshop 2025/Adobe Photoshop 2025.app")
@@ -452,6 +600,7 @@ while IFS= read -r app; do
     [ -z "$app" ] && continue
     app_name=$(basename "$app" .app)
     bundle_id=$(defaults read "$app/Contents/Info" CFBundleIdentifier 2>/dev/null)
+    [ -n "$bundle_id" ] && echo "$bundle_id" >> "$INSTALLED_IDS"
 
     junk=()
     while IFS= read -r junk_line; do junk+=("$junk_line"); done < <(junk_paths_for_app "$bundle_id" "$app_name")
@@ -515,10 +664,10 @@ else
             sjunk=()
             while IFS= read -r sjunk_line; do sjunk+=("$sjunk_line"); done < <(junk_paths_for_app "$sbid" "$sname")
             for jp in "${sjunk[@]}"; do
-                [ -e "$jp" ] && rm -rf "$jp"
+                [ -e "$jp" ] && rmx "$jp"
             done
-            echo "  done:  $sname"
-            echo "  [ok] Smart Scan: $sname" >> "$LOGFILE"
+            say_done "$sname"
+            log_ok "Smart Scan: $sname"
         done
     else
         echo "  no apps selected -- skipping."
@@ -526,19 +675,82 @@ else
     echo ""
 fi
 
+# ── Large files (report only) ─────────────────────────────────────────────────
+echo "-- Large Files (report only -- never deleted) --"
+LARGE_FILES=$(find "$HOME" \( -path "$HOME/Library/CloudStorage" -o -path "$HOME/Library/Mobile Documents" \
+        -o -path "$HOME/.Trash" -o -name "*.photoslibrary" -o -name "*.app" \) -prune \
+        -o -type f -size +200M -print0 2>/dev/null \
+    | xargs -0 stat -f '%z|%Sm|%N' -t '%Y-%m-%d' 2>/dev/null \
+    | sort -t'|' -k1,1 -nr | head -15)
+if [ -z "$LARGE_FILES" ]; then
+    echo "  no files over 200 MB found."
+else
+    echo "  largest files over 200 MB (review and delete manually if unneeded):"
+    while IFS='|' read -r bytes mdate fpath; do
+        printf '   %6s MB  %s  %s\n' "$((bytes / 1048576))" "$mdate" "$fpath"
+    done <<< "$LARGE_FILES"
+fi
+echo ""
+
+# ── Orphaned app data (report only) ───────────────────────────────────────────
+# Leftovers in ~/Library from apps that are no longer installed. Conservative:
+# an item is only flagged when NO installed app shares its vendor prefix (first
+# two bundle-ID components), so e.g. com.google.* is never flagged while any
+# Google app is installed. Apple items are skipped. Nothing is deleted.
+echo "-- Orphaned App Data (report only -- never deleted) --"
+ORPHAN_VENDORS="$HOME/.compresoclean_vendors.tmp"
+ORPHAN_REPORT="$HOME/.compresoclean_orphans.tmp"
+awk -F. 'NF>=2 {print tolower($1"."$2)}' "$INSTALLED_IDS" | sort -u > "$ORPHAN_VENDORS"
+> "$ORPHAN_REPORT"
+for f in "$HOME"/Library/Application\ Support/* "$HOME"/Library/Containers/* \
+         "$HOME"/Library/Saved\ Application\ State/* "$HOME"/Library/Preferences/*.plist \
+         "$HOME"/Library/HTTPStorages/* "$HOME"/Library/WebKit/*; do
+    name=$(basename "$f"); name="${name%.plist}"; name="${name%.savedState}"
+    [[ "$name" =~ ^[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.[A-Za-z0-9._-]+$ ]] || continue
+    case "$name" in com.apple.*|group.com.apple.*|systemgroup.*) continue ;; esac
+    vendor=$(printf '%s' "$name" | awk -F. '{print tolower($1"."$2)}')
+    grep -qxF "$vendor" "$ORPHAN_VENDORS" && continue
+    okb=$(du -sk "$f" 2>/dev/null | awk '{print $1}')
+    echo "${okb:-0}|$f" >> "$ORPHAN_REPORT"
+done
+ORPHANS=$(sort -t'|' -k1,1 -nr "$ORPHAN_REPORT" | head -20)
+rm -f "$ORPHAN_VENDORS" "$ORPHAN_REPORT" "$INSTALLED_IDS"
+if [ -z "$ORPHANS" ]; then
+    echo "  no likely orphaned app data found."
+else
+    echo "  possible leftovers from uninstalled apps (heuristic -- review before removing):"
+    while IFS='|' read -r okb opath; do
+        printf '   %6s MB  %s\n' "$((okb / 1024))" "$opath"
+    done <<< "$ORPHANS"
+fi
+echo ""
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
-AFTER_AVAIL=$(df / | tail -1 | awk '{print $4}')
-MB_FREED=$(( (AFTER_AVAIL - BEFORE_AVAIL) / 2048 ))
+if [ "$DRY_RUN" = "1" ]; then
+    DRY_MB=$(( $(dry_total_kb) / 1024 ))
+    rm -f "$DRY_TALLY"
+    echo "DRY RUN complete -- nothing was deleted."
+    echo "Would free approximately: ${DRY_MB} MB"
+    echo "(estimate; brew cleanup and simulator runtime images are not counted)"
+    echo ""
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] CompresoClean v${VERSION} -- Dry run. ~${DRY_MB} MB reclaimable." >> "$LOGFILE"
+    osascript -e "display notification \"Would free about ${DRY_MB} MB. Nothing was deleted.\" with title \"CompresoClean v${VERSION}\" subtitle \"Dry run complete\""
+else
+    rm -f "$DRY_TALLY"
+    AFTER_AVAIL=$(df / | tail -1 | awk '{print $4}')
+    MB_FREED=$(( (AFTER_AVAIL - BEFORE_AVAIL) / 2048 ))
 
-echo "AFTER:"; df -h /; echo ""
-echo "Space freed: ${MB_FREED} MB"
-echo ""
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] CompresoClean v1.3 -- Cleanup complete. ${MB_FREED} MB freed." >> "$LOGFILE"
-echo "Log saved to ~/.compresoclean.log"
-echo "Cleanup complete."
+    echo "AFTER:"; df -h /; echo ""
+    echo "Space freed: ${MB_FREED} MB"
+    echo ""
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] CompresoClean v${VERSION} -- Cleanup complete. ${MB_FREED} MB freed." >> "$LOGFILE"
+    [ "$TRASH_MODE" = "1" ] && echo "Trash mode: moved items are in ~/.Trash. Empty the Trash to reclaim the space."
+    echo "Log saved to ~/.compresoclean.log"
+    echo "Cleanup complete."
 
-osascript -e "display notification \"Freed ${MB_FREED} MB of disk space.\" with title \"CompresoClean v1.3\" subtitle \"Cleanup complete\""
+    osascript -e "display notification \"Freed ${MB_FREED} MB of disk space.\" with title \"CompresoClean v${VERSION}\" subtitle \"Cleanup complete\""
+fi
 rm -f ~/.compresoclean_runner.sh
 CLEANSCRIPT
 
@@ -546,5 +758,5 @@ chmod +x ~/.compresoclean_runner.sh
 
 osascript -e 'tell application "Terminal"
     activate
-    do script "~/.compresoclean_runner.sh"
+    do script "DRY_RUN='"$DRY_RUN"' TRASH_MODE='"$TRASH_MODE"' CC_VERSION='"$VERSION"' ~/.compresoclean_runner.sh"
 end tell'
