@@ -55,7 +55,7 @@ Beyond the basics (system caches, logs, Trash, temp files), it goes after the di
 
 ### Option 1 — Download DMG (Recommended)
 
-1. Go to [Releases](../../releases) and download `CompresoClean_v1.4.dmg`
+1. Go to [Releases](../../releases) and download `CompresoClean_v1.5.dmg`
 2. Open the DMG and drag `CompresoClean.app` to `/Applications`
 3. Double-click to run
 
@@ -70,7 +70,7 @@ chmod +x build.sh
 ./build.sh
 ```
 
-This assembles the `.app` bundle and outputs a DMG to `~/Desktop/CompresoClean_v1.4.dmg`.
+This assembles the `.app` bundle and outputs a DMG to `~/Desktop/CompresoClean_v1.5.dmg`.
 
 ---
 
@@ -141,6 +141,7 @@ Example entry:
 
 | Version | Date | Notes |
 |---|---|---|
+| v1.5 | 2026-11 | Dry-run preview mode, optional recoverable Trash mode (`--trash`), pnpm/Yarn/Docker cache cleanup, report-only large-file and orphaned-app-data finders, optional code signing + notarization in `build.sh`; fixed runner version strings |
 | v1.4 | 2026-09 | New "Delete ALL iOS simulators + Android emulators? [y/N]" prompt, asked once, before any device data is touched (defaults to No) — covers all iOS simulator devices + runtime images + DeviceSupport, and all Android AVDs + SDK system-images/emulator binary, not just orphaned ones; DerivedData/Gradle/Xcode/Android Studio caches still always run regardless of that answer; added CoreDevice install cache cleanup; added hidden dotfile cache cleanup (`~/.cache`, npx, Flutter/Dart pub-cache + dartServer, Antigravity IDE recordings/conversations/backups) that Smart Scan's `~/Library`-only scan can't see; fixed a silent partial-failure in the standard cache wipe when a cached app bundle contains read-only files |
 | v1.3 | 2026-08 | Smart Scan — generic scan of every installed app, ranks by reclaimable size, numbered-list multi-select cleaning, plus explicit Xcode/Android Studio/Gradle cache handling |
 | v1.2 | 2026-05 | Expanded to 28 creative apps, bundle ID detection, no-emoji terminal output |

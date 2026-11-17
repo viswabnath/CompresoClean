@@ -1,6 +1,6 @@
 # CompresoClean — Build Documentation
 **Built by Viswanath Bodasakurthi | OneMark Agency**
-**Date: April 2026 (updated September 2026) | Version: 1.4**
+**Date: April 2026 (updated November 2026) | Version: 1.5**
 
 ---
 
